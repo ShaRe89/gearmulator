@@ -16,6 +16,7 @@ SET(ASSETS "parameterDescriptions_C.json")
 # build; Galaxpel is the only shipped skin going forward.
 addSkin("Osirus" "Galaxpel" "skins/Galaxpel" "VirusC_Galaxpel.rml")
 
+addSkin("Osirus" "HardwareC" "skins/HardwareC" "VirusC_HardwareC.rml")
 buildSkinHeader()
 
 juce_add_binary_data(osirusJucePlugin_BinaryData SOURCES ${ASSETS} ${ASSETS_SKINS})
