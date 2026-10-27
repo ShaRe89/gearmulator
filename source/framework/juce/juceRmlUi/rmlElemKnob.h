@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include "rmlElemValue.h"
 
 #include "RmlUi/Core/ElementInstancer.h"
@@ -21,11 +23,15 @@ namespace juceRmlUi
 
 		void setEndless(bool _endless);
 
+		// Last position reached by user input, in this element's value range. Unknown until first input.
+		std::optional<float> getUserPosition() const { return m_userPosition; }
+
 		static bool isReversed(const Rml::Element* _element);
 
 		static void processMouseWheel(Rml::Element& _element, Rml::Event& _event);
 
 	private:
+		void setValueFromUser(float _value);
 		void processMouseMove(const Rml::Event& _event);
 		void processMouseWheel(Rml::Event& _event);
 		void processDoubleClick(const Rml::Event& _event);
@@ -39,6 +45,7 @@ namespace juceRmlUi
 		uint32_t m_frames = 16;
 		bool m_spriteDirty = true;
 		float m_mouseDownValue = 0.0f;
+		std::optional<float> m_userPosition;
 
 		float m_speedScaleShift = 0.1f;
 		float m_speedScaleCtrl = 0.2f;

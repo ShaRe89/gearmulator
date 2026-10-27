@@ -122,9 +122,10 @@ namespace juceRmlUi
 		const auto step = range > 32 && !helper::getKeyModCommand(_event)
 			? range * delta / 32.0f : (delta > 0.0f ? 1.0f : -1.0f);
 		auto value = getValue(&_element) - step;
-		if (const auto* knob = dynamic_cast<const ElemKnob*>(&_element))
-			value = knob->wrapValue(value);
-		setValue(&_element, value);
+		if (auto* knob = dynamic_cast<ElemKnob*>(&_element))
+			knob->setValueFromUser(knob->wrapValue(value));
+		else
+			setValue(&_element, value);
 	}
 
 	void ElemKnob::processMouseMove(const Rml::Event& _event)
@@ -156,7 +157,14 @@ namespace juceRmlUi
 
 		auto value = m_mouseDownValue + d;
 
-		setValue(wrapValue(value));
+		setValueFromUser(wrapValue(value));
+	}
+
+	void ElemKnob::setValueFromUser(const float _value)
+	{
+		setValue(_value);
+		// Keep the position separate from subsequent parameter-driven setValue() calls.
+		m_userPosition = getValue();
 	}
 
 	float ElemKnob::wrapValue(float _value) const
@@ -181,7 +189,7 @@ namespace juceRmlUi
 	{
 		const auto d = getDefaultValue();
 		if (isInRange(d))
-			setValue(d);
+			setValueFromUser(d);
 	}
 
 	void ElemKnob::updateSprite()

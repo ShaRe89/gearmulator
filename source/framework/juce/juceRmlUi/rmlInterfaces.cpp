@@ -24,11 +24,28 @@
 #include "RmlUi/Core/PropertyDefinition.h"
 #include "RmlUi/Core/StyleSheetSpecification.h"
 #include "RmlUi/Lua/Lua.h"
+#include "Lua/Element.h"
 
 namespace juceRmlUi
 {
 	namespace
 	{
+		// knobs.getUserPosition(element) -> number, or nil before the knob's first user input.
+		int luaGetKnobUserPosition(lua_State* L)
+		{
+			const auto* element = Rml::Lua::LuaType<Rml::Element>::check(L, 1);
+			const auto* knob = dynamic_cast<const ElemKnob*>(element);
+			if (!knob)
+				return luaL_error(L, "getUserPosition: expected a knob element");
+
+			const auto position = knob->getUserPosition();
+			if (position)
+				lua_pushnumber(L, *position);
+			else
+				lua_pushnil(L);
+			return 1;
+		}
+
 		GenericInstancers<ElemButton, ElemCanvas, ElemComboBox, ElemKnob, ElemList, ElemListEntry, ElemSplitter, ElemStrokes, ElemTree, ElemTreeNode> g_instancers
 		                 ("button",   "canvas",   "combo",      "knob",   "list",   "listentry",   "splitter"  , "strokes",   "tree",   "treenode"  );
 
@@ -68,6 +85,10 @@ namespace juceRmlUi
 		Rml::Lua::Initialise(m_coreInstance);
 		registerCanvasLua(m_coreInstance.lua_state);
 		registerStrokesLua(m_coreInstance.lua_state);
+		lua_newtable(m_coreInstance.lua_state);
+		lua_pushcfunction(m_coreInstance.lua_state, luaGetKnobUserPosition);
+		lua_setfield(m_coreInstance.lua_state, -2, "getUserPosition");
+		lua_setglobal(m_coreInstance.lua_state, "knobs");
 
 		Rml::SetSystemInterface(m_coreInstance, &m_systemInterface);
 		Rml::SetFontEngineInterface(m_coreInstance, &m_fontEngineInterface);
