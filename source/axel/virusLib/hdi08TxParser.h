@@ -5,10 +5,23 @@
 
 #include <array>
 #include <cstddef>
+#include <cstdint>
 
 namespace virusLib
 {
 	class Microcontroller;
+
+	struct BpmLedDiagnostics
+	{
+		enum Counter : size_t
+		{
+			StatusMessages, CompletedStatusMessages, RisingEdges, FallingEdges, ProcessSamples,
+			LastIntervalTransitions, MaxIntervalTransitions, MultipleTransitionIntervals,
+			CoveredOnPulses, SampledRisingEdges, SampledFallingEdges, Count
+		};
+		bool enabled = false;
+		std::array<uint64_t, Count> counters{};
+	};
 
 	class Hdi08TxParser
 	{
@@ -36,6 +49,11 @@ namespace virusLib
 		bool append(dsp56k::TWord _data);
 		const std::vector<synthLib::SMidiEvent>& getMidiData() const { return m_midiData; }
 		void clearMidiData() { m_midiData.clear(); }
+		bool getBpmLedOn() const { return m_bpmLedOn; }
+		// Called under the existing Microcontroller mutex, never directly from the GUI.
+		void setBpmLedDiagnosticsEnabled(bool _enabled);
+		void sampleBpmLedDiagnostics();
+		const BpmLedDiagnostics& getBpmLedDiagnostics() const { return m_bpmDiagnostics; }
 		void waitForPreset(uint32_t _byteCount);
 
 		bool waitingForPreset() const
@@ -55,6 +73,7 @@ namespace virusLib
 		bool appendUsbMidi(dsp56k::TWord _data);
 		bool processUsbMidiPacket();
 		bool finishSysex();
+		void recordBpmLedStatus(bool _on);
 
 		Microcontroller& m_mc;
 
@@ -83,5 +102,10 @@ namespace virusLib
 		std::array<size_t, static_cast<size_t>(PatternType::Count)> m_patternPositions = {};
 
 		bool m_dspHasBooted = false;
+		bool m_bpmLedOn = false;
+		BpmLedDiagnostics m_bpmDiagnostics;
+		uint64_t m_bpmIntervalTransitions = 0;
+		bool m_bpmUnobservedOn = false;
+		bool m_bpmSampledOn = false;
 	};
 }

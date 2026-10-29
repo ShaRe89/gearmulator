@@ -6,6 +6,7 @@
 #include "synthLib/midiTypes.h"
 
 #include <list>
+#include <atomic>
 #include <mutex>
 #include <limits>
 
@@ -62,6 +63,9 @@ public:
 	static synthLib::SysexBuffer createMultiDump(const ROMFile& _rom, BankNumber _bank, uint8_t _program, const TPreset& _preset, uint8_t _deviceId = OMNI_DEVICE_ID);
 
 	bool dspHasBooted() const;
+	bool getBpmLedOn();
+	void setBpmLedDiagnosticsEnabled(bool _enabled);
+	bool readBpmLedDiagnostics(BpmLedDiagnostics& _out) const;
 
 	const ROMFile& getROM() const { return m_rom; }
 
@@ -161,6 +165,15 @@ private:
 	mutable std::recursive_mutex m_mutex;
 	bool m_loadingState = false;
 	bool m_cppArpeggiator = false;
+
+	// Fixed-size, lock-free publication. Reader never touches the live parser.
+	static_assert(std::atomic<uint64_t>::is_always_lock_free && std::atomic<bool>::is_always_lock_free);
+	// Low bit: enabled; upper bits: command generation, so Start also resets a running session.
+	std::atomic<uint64_t> m_bpmDiagnosticsRequested{0};
+	uint64_t m_bpmDiagnosticsAppliedRequest = 0;
+	std::atomic<bool> m_bpmDiagnosticsPublishedEnabled{false};
+	std::atomic<uint64_t> m_bpmDiagnosticsVersion{0};
+	std::array<std::atomic<uint64_t>, BpmLedDiagnostics::Count> m_bpmDiagnosticsPublished{};
 };
 
 }

@@ -41,6 +41,8 @@ namespace virusLib
 			}
 			else if(_data == 0xf50000)
 			{
+				if(m_mc.getROM().getModel() == DeviceModel::C && m_bpmDiagnostics.enabled)
+					++m_bpmDiagnostics.counters[BpmLedDiagnostics::StatusMessages];
 				m_state = State::StatusReport;
 				m_remainingStatusBytes = 1;
 				LOGTX("DSP TX [StatusReport] Begin (" << m_remainingStatusBytes << " words expected)");
@@ -99,6 +101,11 @@ namespace virusLib
 							{
 							case PatternType::DspBoot:
 								m_dspHasBooted = true;
+								if(m_mc.getROM().getModel() == DeviceModel::C)
+								{
+									m_bpmLedOn = false;
+									setBpmLedDiagnosticsEnabled(m_bpmDiagnostics.enabled);
+								}
 								LOG("DSP TX [Boot] DSP boot completed (F40000 7F0000)");
 								break;
 							default:
@@ -202,6 +209,12 @@ namespace virusLib
 				}
 				else if(m_dspStatus.size() == 1)
 				{
+					// Virus C OS 6.6, 8051 handler 0x24a8: the upper byte is the BPM LED state.
+					if(m_mc.getROM().getModel() == DeviceModel::C)
+					{
+						recordBpmLedStatus(byte != 0);
+						m_bpmLedOn = byte != 0;
+					}
 					LOGTX("DSP TX [StatusReport] data=" << HEX(m_dspStatus.back()));
 				}
 				m_dspStatus.clear();
@@ -211,6 +224,50 @@ namespace virusLib
 		}
 
 		return false;
+	}
+
+	void Hdi08TxParser::setBpmLedDiagnosticsEnabled(const bool _enabled)
+	{
+		// Enabling starts a new session; disabling freezes the last counters.
+		if(_enabled)
+			m_bpmDiagnostics.counters.fill(0);
+		m_bpmDiagnostics.enabled = _enabled;
+		m_bpmIntervalTransitions = 0;
+		m_bpmUnobservedOn = false;
+		m_bpmSampledOn = m_bpmLedOn;
+	}
+
+	void Hdi08TxParser::recordBpmLedStatus(const bool _on)
+	{
+		if(!m_bpmDiagnostics.enabled)
+			return;
+		auto& c = m_bpmDiagnostics.counters;
+		++c[BpmLedDiagnostics::CompletedStatusMessages];
+		if(_on == m_bpmLedOn)
+			return;
+		++m_bpmIntervalTransitions;
+		++c[_on ? BpmLedDiagnostics::RisingEdges : BpmLedDiagnostics::FallingEdges];
+		if(!_on && m_bpmUnobservedOn)
+			++c[BpmLedDiagnostics::CoveredOnPulses];
+		m_bpmUnobservedOn = _on;
+	}
+
+	void Hdi08TxParser::sampleBpmLedDiagnostics()
+	{
+		if(!m_bpmDiagnostics.enabled)
+			return;
+		auto& c = m_bpmDiagnostics.counters;
+		++c[BpmLedDiagnostics::ProcessSamples];
+		c[BpmLedDiagnostics::LastIntervalTransitions] = m_bpmIntervalTransitions;
+		if(m_bpmIntervalTransitions > c[BpmLedDiagnostics::MaxIntervalTransitions])
+			c[BpmLedDiagnostics::MaxIntervalTransitions] = m_bpmIntervalTransitions;
+		if(m_bpmIntervalTransitions > 1)
+			++c[BpmLedDiagnostics::MultipleTransitionIntervals];
+		if(m_bpmSampledOn != m_bpmLedOn)
+			++c[m_bpmLedOn ? BpmLedDiagnostics::SampledRisingEdges : BpmLedDiagnostics::SampledFallingEdges];
+		m_bpmSampledOn = m_bpmLedOn;
+		m_bpmUnobservedOn = false;
+		m_bpmIntervalTransitions = 0;
 	}
 
 	bool Hdi08TxParser::beginPreset(const dsp56k::TWord _data)

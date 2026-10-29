@@ -375,6 +375,7 @@ namespace juceRmlUi
 			{
 				m_rmlContext->Render();
 				m_renderProxy->finishFrame();
+				evFrameGenerated(this);
 			}
 		}
 
@@ -1159,6 +1160,7 @@ namespace juceRmlUi
 				m_rmlContext->Render();
 
 				m_renderProxy->finishFrame();
+				evFrameGenerated(this);
 			}
 
 			evPostUpdate(this);
@@ -1411,6 +1413,7 @@ namespace juceRmlUi
 			m_rmlContext->Render();
 
 			m_renderProxy->finishFrame();
+			evFrameGenerated(this);
 
 			evPostUpdate(this);
 		}

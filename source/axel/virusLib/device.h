@@ -32,6 +32,9 @@ namespace virusLib
 
 		bool isValid() const override;
 
+		void setBpmLedDiagnosticsEnabled(bool _enabled) { m_mc->setBpmLedDiagnosticsEnabled(_enabled); }
+		bool readBpmLedDiagnostics(BpmLedDiagnostics& _out) const { return m_mc->readBpmLedDiagnostics(_out); }
+
 		void process(const synthLib::TAudioInputs& _inputs, const synthLib::TAudioOutputs& _outputs, size_t _size, const std::vector<synthLib::SMidiEvent>& _midiIn, std::vector<synthLib::SMidiEvent>& _midiOut) override;
 
 		bool getState(std::vector<uint8_t>& _state, synthLib::StateType _type) override;

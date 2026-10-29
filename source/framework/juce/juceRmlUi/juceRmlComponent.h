@@ -59,6 +59,9 @@ namespace juceRmlUi
 
 		baseLib::Event<RmlComponent*> evPreUpdate;
 		baseLib::Event<RmlComponent*> evPostUpdate;
+		// One RmlUi command frame has been generated and queued, not presented by the GPU.
+		// Runs under ScopedAccess and the context render mutex, also on the GL fallback path.
+		baseLib::Event<RmlComponent*> evFrameGenerated;
 		// Fired when the component loses keyboard focus, after every key RmlUi still saw as held has been released.
 		baseLib::Event<RmlComponent*> evFocusLost;
 		// Fired asynchronously, after layout, when the size of the <body> changed: in the fixed window mode when the

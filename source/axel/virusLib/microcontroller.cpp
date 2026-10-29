@@ -1455,6 +1455,67 @@ uint8_t Microcontroller::calcChecksum(const synthLib::SysexBuffer& _data, const 
 	return cs & 0x7f;
 }
 
+bool Microcontroller::getBpmLedOn()
+{
+	std::lock_guard lock(m_mutex);
+	if(m_rom.getModel() != DeviceModel::C || m_hdi08TxParsers.empty())
+		return false;
+	auto& parser = m_hdi08TxParsers.front();
+	const auto command = m_bpmDiagnosticsRequested.load();
+	const auto requested = (command & 1) != 0;
+	const auto changed = command != m_bpmDiagnosticsAppliedRequest;
+	if(changed && requested)
+		parser.setBpmLedDiagnosticsEnabled(true);
+	if(parser.getBpmLedDiagnostics().enabled)
+		parser.sampleBpmLedDiagnostics();
+	if(changed && !requested)
+		parser.setBpmLedDiagnosticsEnabled(false);
+	m_bpmDiagnosticsAppliedRequest = command;
+	if(requested || changed)
+	{
+		const auto& d = parser.getBpmLedDiagnostics();
+		m_bpmDiagnosticsVersion.fetch_add(1);
+		m_bpmDiagnosticsPublishedEnabled.store(d.enabled);
+		for(size_t i = 0; i < d.counters.size(); ++i)
+			m_bpmDiagnosticsPublished[i].store(d.counters[i]);
+		m_bpmDiagnosticsVersion.fetch_add(1);
+	}
+	return parser.getBpmLedOn();
+}
+
+void Microcontroller::setBpmLedDiagnosticsEnabled(const bool _enabled)
+{
+	if(m_rom.getModel() == DeviceModel::C)
+	{
+		auto previous = m_bpmDiagnosticsRequested.load();
+		while(!m_bpmDiagnosticsRequested.compare_exchange_weak(previous,
+			((previous + 2) & ~uint64_t{1}) | (_enabled ? uint64_t{1} : uint64_t{0}))) {}
+	}
+}
+
+bool Microcontroller::readBpmLedDiagnostics(BpmLedDiagnostics& _out) const
+{
+	if(m_rom.getModel() != DeviceModel::C)
+		return false;
+	// Bounded retry, no locks or allocation; sequential consistency keeps the snapshot coherent.
+	for(unsigned attempt = 0; attempt < 4; ++attempt)
+	{
+		const auto before = m_bpmDiagnosticsVersion.load();
+		if(before & 1)
+			continue;
+		BpmLedDiagnostics result;
+		result.enabled = m_bpmDiagnosticsPublishedEnabled.load();
+		for(size_t i = 0; i < result.counters.size(); ++i)
+			result.counters[i] = m_bpmDiagnosticsPublished[i].load();
+		if(before == m_bpmDiagnosticsVersion.load())
+		{
+			_out = result;
+			return true;
+		}
+	}
+	return false;
+}
+
 bool Microcontroller::dspHasBooted() const
 {
 	std::lock_guard lock(m_mutex);

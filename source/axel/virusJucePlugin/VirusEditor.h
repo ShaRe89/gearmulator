@@ -47,6 +47,7 @@ namespace genericVirusUI
 		~VirusEditor() override;
 
 		void create() override;
+		void openMenu(Rml::Event& _event) override;
 
 		void setPart(size_t _part);
 

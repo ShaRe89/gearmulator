@@ -330,6 +330,56 @@ namespace genericVirusUI
 		m_deviceModel->SetInnerRML(m);
 	}
 
+	void VirusEditor::openMenu(Rml::Event& _event)
+	{
+		if(m_processor.getModel() != virusLib::DeviceModel::C ||
+			_event.GetParameter<int>("ctrl_key", 0) == 0 || _event.GetParameter<int>("shift_key", 0) == 0)
+		{
+			Editor::openMenu(_event);
+			return;
+		}
+		// Message-thread-only readout. Reacquire the device for each action, not at menu creation.
+		juceRmlUi::Menu menu;
+		menu.addEntry("BPM diagnostics: start / reset", [this]
+		{
+			if(auto* device = dynamic_cast<virusLib::Device*>(m_processor.getPlugin().getDevice()))
+			{
+				device->setBpmLedDiagnosticsEnabled(true);
+				if(m_leds)
+					m_leds->setBpmDiagnosticsEnabled(true);
+			}
+		});
+		menu.addEntry("BPM diagnostics: stop", [this]
+		{
+			if(auto* device = dynamic_cast<virusLib::Device*>(m_processor.getPlugin().getDevice()))
+				device->setBpmLedDiagnosticsEnabled(false);
+			if(m_leds)
+				m_leds->setBpmDiagnosticsEnabled(false);
+		});
+		menu.addEntry("BPM diagnostics: copy counters", [this]
+		{
+			auto* device = dynamic_cast<virusLib::Device*>(m_processor.getPlugin().getDevice());
+			virusLib::BpmLedDiagnostics d;
+			if(!device || !device->readBpmLedDiagnostics(d))
+			{
+				juce::SystemClipboard::copyTextToClipboard("BPM diagnostics: unavailable (local Virus C required), or snapshot busy; retry.");
+				return;
+			}
+			static constexpr const char* names[] = {
+				"f5_messages", "completed_f5_messages", "received_on_edges", "received_off_edges", "process_samples",
+				"last_interval_transitions", "max_interval_transitions", "multiple_transition_intervals",
+				"covered_on_pulses", "sampled_on_edges", "sampled_off_edges"
+			};
+			static_assert(sizeof(names) / sizeof(names[0]) == virusLib::BpmLedDiagnostics::Count);
+			std::string report = std::string("Virus C BPM diagnostics\nenabled=") + (d.enabled ? "1\n" : "0\n");
+			for(size_t i = 0; i < d.counters.size(); ++i)
+				report += std::string(names[i]) + "=" + std::to_string(d.counters[i]) + "\n";
+			report += m_leds ? m_leds->getBpmDiagnosticsReport() : "gui_diagnostics=unavailable_no_LED_listener\n";
+			juce::SystemClipboard::copyTextToClipboard(juce::String(report));
+		});
+		menu.runModal(_event);
+	}
+
 	void VirusEditor::savePreset(const Rml::Event& _event)
 	{
 		// Pre-request the multi edit buffer so it's cached by the time the user
