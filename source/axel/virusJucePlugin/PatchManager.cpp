@@ -965,7 +965,25 @@ namespace genericVirusUI
 		case PatchType::Arrangement:
 			return activateArrangement(sysex);
 		case PatchType::Single:
-			return activateSingle(sysex, _part);
+			{
+				if(!activateSingle(sysex, _part))
+					return false;
+				// The edit-buffer dump has no source program number. Retain the
+				// actual ROM/RAM catalogue position without loading the sound again.
+				const auto source = _patch->source.lock();
+				if(!m_controller.isMultiMode() && !virusLib::isTIFamily(m_processor.getModel())
+					&& source && source->type == pluginLib::patchDB::SourceType::Rom
+					&& _patch->program < virusLib::ROMFile::getSinglesPerBank()
+					&& _patch->bank == virusLib::toMidiByte(m_controller.getCurrentPartBank(0)))
+				{
+					if(const auto* position = m_controller.getParameter("C_Undefined102", 0))
+					{
+						const auto& desc = position->getDescription();
+						m_controller.sendParameterChange(desc.page, 0, desc.index, static_cast<uint8_t>(_patch->program));
+					}
+				}
+				return true;
+			}
 		default:
 			return false;
 		}

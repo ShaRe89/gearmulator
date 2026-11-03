@@ -351,8 +351,8 @@
  		{"page":114, "class":"Global", "index":98, "name":"Midi Dump Tx", "min":0, "max":4, "isPublic":false, "isDiscrete":true, "isBool":false},
  		{"page":114, "class":"Global", "index":99, "name":"Midi Dump Rx", "min":0, "max":4, "isPublic":false, "isDiscrete":true, "isBool":false},
  		{"page":114, "index":100, "name":"C_Undefined100", "min":0, "max":127, "toText":"unsignedZero", "isPublic":false, "isDiscrete":false, "isBool":false},
- 		{"page":114, "index":101, "name":"C_Undefined101", "min":0, "max":127, "toText":"unsignedZero", "isPublic":false, "isDiscrete":false, "isBool":false},
- 		{"page":114, "index":102, "name":"C_Undefined102", "min":0, "max":127, "toText":"unsignedZero", "isPublic":false, "isDiscrete":false, "isBool":false},
+ 		{"page":114, "class":"Global", "index":101, "name":"C_Undefined101", "min":0, "max":127, "toText":"unsignedZero", "isPublic":false, "isDiscrete":false, "isBool":false},
+ 		{"page":114, "class":"Global", "index":102, "name":"C_Undefined102", "min":0, "max":127, "toText":"unsignedZero", "isPublic":false, "isDiscrete":false, "isBool":false},
  		{"page":114, "index":103, "name":"C_Undefined103", "min":0, "max":127, "toText":"unsignedZero", "isPublic":false, "isDiscrete":false, "isBool":false},
  		{"page":114, "index":104, "name":"C_Undefined104", "min":0, "max":127, "toText":"unsignedZero", "isPublic":false, "isDiscrete":false, "isBool":false},
  		{"page":114, "class":"Global", "index":105, "name":"Multi Program Change", "min":0, "max":127, "isPublic":false, "isDiscrete":false, "isBool":false},
@@ -373,7 +373,7 @@
  		{"page":114, "class":"Global", "index":123, "name":"Part Number", "min":0, "max":127, "isPublic":false, "isDiscrete":true, "isBool":false}, // $0 .. $15, $40
  		{"page":114, "class":"Global", "index":124, "name":"Midi Channel", "min":0, "max":15, "isPublic":true, "isDiscrete":true, "isBool":false},
  		{"page":114, "class":"Global", "index":125, "name":"Led Mode", "min":0, "max":2, "isPublic":false, "isDiscrete":true, "isBool":false},
- 		{"page":114, "class":"Global", "index":126, "name":"LCD Contrast", "min":0, "max":127, "isPublic":false, "isDiscrete":false, "isBool":false},
+ 		{"page":114, "class":"Global", "index":126, "name":"LCD Contrast", "min":0, "max":127, "default":64, "isPublic":false, "isDiscrete":false, "isBool":false},
  		{"page":114, "class":"Global", "index":127, "name":"Master Volume", "min":0, "max":127, "isPublic":true, "isDiscrete":false, "isBool":false}
  	],
 	"regions":

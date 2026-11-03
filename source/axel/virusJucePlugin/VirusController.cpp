@@ -333,7 +333,7 @@ namespace virus
 
 	void Controller::setCurrentPartPreset(uint8_t _part, const virusLib::BankNumber _bank, uint8_t _prg)
 	{
-    	if(_bank == virusLib::BankNumber::EditBuffer || _prg > m_singles[0].size())
+    	if(_bank == virusLib::BankNumber::EditBuffer || _prg >= m_singles[0].size())
     	{
 			jassertfalse;
 			return;
@@ -349,9 +349,14 @@ namespace virus
 
 		const uint8_t pt = isMultiMode() ? _part : virusLib::SINGLE;
 
-		sendParameterChange(MessageType::PARAM_CHANGE_C, pt, virusLib::PART_BANK_SELECT, virusLib::toMidiByte(_bank));
+		const bool abcMulti = isMultiMode() && !virusLib::isTIFamily(m_processor.getModel());
+		// ABC multi-part bank references are zero-based; SINGLE uses MIDI bank numbers.
+		const auto bankValue = abcMulti ? static_cast<uint8_t>(bank) : virusLib::toMidiByte(_bank);
+		sendParameterChange(MessageType::PARAM_CHANGE_C, pt, virusLib::PART_BANK_SELECT, bankValue);
 		sendParameterChange(MessageType::PARAM_CHANGE_C, pt, virusLib::PART_PROGRAM_CHANGE, _prg);
 
+		if(abcMulti)
+			requestMulti(0, 0);
 		requestSingle(toMidiByte(virusLib::BankNumber::EditBuffer), pt);
 
 		m_currentBank[_part] = _bank;
@@ -366,11 +371,25 @@ namespace virus
 
 	virusLib::BankNumber Controller::getCurrentPartBank(const uint8_t _part) const
     {
+		if(!isMultiMode() && !virusLib::isTIFamily(m_processor.getModel()))
+		{
+			if(const auto* bank = getParameter("C_Undefined101", 0))
+			{
+				const auto value = bank->getUnnormalizedValue();
+				return value >= 0 && static_cast<uint32_t>(value) < getBankCount()
+					? virusLib::fromArrayIndex(static_cast<uint8_t>(value)) : virusLib::BankNumber::EditBuffer;
+			}
+		}
 	    return m_currentBank[_part];
     }
 
 	uint8_t Controller::getCurrentPartProgram(const uint8_t _part) const
     {
+		if(!isMultiMode() && !virusLib::isTIFamily(m_processor.getModel()))
+		{
+			if(const auto* program = getParameter("C_Undefined102", 0))
+				return static_cast<uint8_t>(program->getUnnormalizedValue());
+		}
 	    return m_currentProgram[_part];
     }
 
@@ -503,9 +522,42 @@ namespace virus
 
             onPresetParametersChanged();
 
-            if(m_currentPresetSource[ch] != PresetSource::Browser)
+            if(isMultiMode() && !virusLib::isTIFamily(m_processor.getModel())
+                && m_currentPresetSource[ch] != PresetSource::Browser)
+            {
+                // The arrangement reply precedes its part singles and carries the actual
+                // C31/C33 references. Duplicate or edited names cannot identify a bank.
+                const auto* bankParam = getParameter("Part Bank Select", ch);
+                const auto* programParam = getParameter("Part Program Change", ch);
+                const auto bank = bankParam ? bankParam->getUnnormalizedValue() : -1;
+                const auto program = programParam ? programParam->getUnnormalizedValue() : -1;
+                if(!m_multiEditBuffer.data.empty() && bank >= 0 && static_cast<size_t>(bank) < m_singles.size()
+                    && program >= 0 && static_cast<size_t>(program) < m_singles[bank].size())
+                {
+                    m_currentBank[ch] = virusLib::fromArrayIndex(static_cast<uint8_t>(bank));
+                    m_currentProgram[ch] = static_cast<uint8_t>(program);
+                    m_currentPresetSource[ch] = PresetSource::Rom;
+                }
+                else
+                {
+                    m_currentBank[ch] = virusLib::BankNumber::EditBuffer;
+                    m_currentProgram[ch] = 0;
+                    m_currentPresetSource[ch] = PresetSource::Unknown;
+                }
+            }
+            else if(m_currentPresetSource[ch] != PresetSource::Browser)
             {
 	            bool found = false;
+	            // Keep the native SINGLE position recorded by setCurrentPartPreset().
+	            // A delayed edit-buffer reply may belong to an older selection: its name
+	            // must not replace the requested bank/program, even when it differs.
+	            if(!isMultiMode() && m_currentPresetSource[ch] == PresetSource::Rom
+	                && m_currentBank[ch] != virusLib::BankNumber::EditBuffer)
+	            {
+	                const auto bank = virusLib::toArrayIndex(m_currentBank[ch]);
+	                const auto program = m_currentProgram[ch];
+	                found = bank < m_singles.size() && program < m_singles[bank].size();
+	            }
 	            for(size_t b=0; b<m_singles.size() && !found; ++b)
 	            {
 		            const auto& singlePatches = m_singles[b];
@@ -736,7 +788,8 @@ namespace virus
 		m_singles.resize(2 + rom->getNumSingleBanks());
 
 		// Populate ROM banks directly from ROM data instead of requesting via MIDI
-		for (uint32_t b = 2; b < getBankCount(); ++b)
+		uint32_t b = 2;
+		for (; b < getBankCount(); ++b)
 		{
 			virusLib::ROMFile::TPreset firstPreset;
 			if (!rom->getSingle(static_cast<int>(b - 2), 0, firstPreset))
@@ -760,6 +813,9 @@ namespace virus
 				patch.progNumber = p;
 			}
 		}
+		// The model's upper bound can exceed the banks present in this ROM.
+		// Do not expose empty I/J slots: the device would wrap them to RAM A/B.
+		m_singles.resize(b);
     }
 
     bool Controller::sendSysEx(MidiPacketType _type) const
@@ -868,7 +924,7 @@ namespace virus
 
     void Controller::selectNextPreset(uint8_t _part)
     {
-		if(getCurrentPartProgram(_part) < m_singles[0].size())
+		if(getCurrentPartProgram(_part) + 1 < m_singles[0].size())
 		{
             setCurrentPartPreset(_part, getCurrentPartBank(_part), getCurrentPartProgram(_part) + 1);
 		}

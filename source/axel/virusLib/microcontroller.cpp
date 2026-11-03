@@ -21,6 +21,9 @@ constexpr uint32_t g_sysexPresetHeaderSize = 9;
 constexpr uint32_t g_sysexPresetFooterSize = 2;	// checksum, f7
 
 constexpr uint32_t g_singleRamBankCount = 2;
+// OS6.6 14ED/14F2: publish the existing SINGLE position without a second cache.
+constexpr uint8_t g_singleBankParameter = 101;
+constexpr uint8_t g_singleProgramParameter = 102;
 
 // Page B: where a patch keeps Arp Mode, and the parameter the A, B and C take it as. The TI takes it as 15
 constexpr uint8_t g_arpMode = 1;
@@ -67,9 +70,11 @@ Microcontroller::Microcontroller(DspSingle& _dsp, const ROMFile& _romFile, bool 
 	addDSP(_dsp, _useEsaiBasedMidiTiming);
 
 	m_globalSettings.fill(0xffffffff);
+	if (!m_rom.isTIFamily())
+	    m_globalSettings[LCD_CONTRAST] = 64;
 
 	for(size_t i=0; i<m_multis.size(); ++i)
-		m_rom.getMulti(0, m_multis[i]);
+		m_rom.getMulti(m_rom.isTIFamily() ? 0 : static_cast<int>(i), m_multis[i]);
 
 	m_multiEditBuffer = m_multis.front();
 	
@@ -280,13 +285,15 @@ bool Microcontroller::sendPreset(const uint8_t program, const TPreset& preset, c
 
 	if(isMulti)
 	{
-		// if we want to send a new preset while still waiting for the upgraded one, ignore as its obsolete
-		if (m_sentPresetProgram == 0 && m_sentPresetIsMulti)
+		// Every multi program replaces the same edit buffer; its previous DSP reply is obsolete.
+		if (m_sentPresetIsMulti)
 			m_sentPresetProgram = 0xff;
 
 		m_multiEditBuffer = preset;
 
-		m_globalSettings[PLAY_MODE] = PlayModeMulti;
+		// Loading the multi buffer, including a queued load, must retain MULTI SINGLE.
+		if(m_globalSettings[PLAY_MODE] != PlayModeMultiSingle)
+			m_globalSettings[PLAY_MODE] = PlayModeMulti;
 	}
 	else
 	{
@@ -652,7 +659,8 @@ bool Microcontroller::sendSysex(const synthLib::SysexBuffer& _data, std::vector<
 	const auto deviceId = _data[5];
 	const auto cmd = _data[6];
 
-	if (deviceId != m_globalSettings[DEVICE_ID] && deviceId != OMNI_DEVICE_ID && m_globalSettings[DEVICE_ID] != OMNI_DEVICE_ID)
+	if (!(_source == MidiEventSource::Internal && m_loadingState)
+	    && deviceId != m_globalSettings[DEVICE_ID] && deviceId != OMNI_DEVICE_ID && m_globalSettings[DEVICE_ID] != OMNI_DEVICE_ID)
 	{
 		// ignore messages intended for a different device but allow omni requests
 		return true;
@@ -736,7 +744,7 @@ bool Microcontroller::sendSysex(const synthLib::SysexBuffer& _data, std::vector<
 		}
 	};
 
-	auto buildGlobalResponse = [&](const uint8_t _param)
+	auto buildGlobalResponse = [&](const uint8_t _param, const uint32_t _value)
 	{
 		SMidiEvent ev(MidiEventSource::Device);
 		auto& response = ev.sysex;
@@ -746,7 +754,7 @@ bool Microcontroller::sendSysex(const synthLib::SysexBuffer& _data, std::vector<
 		response.push_back(globalSettingsPage());
 		response.push_back(0);	// part = 0
 		response.push_back(_param);
-		response.push_back(static_cast<uint8_t>(m_globalSettings[_param]));
+		response.push_back(static_cast<uint8_t>(_value));
 		response.push_back(M_ENDOFSYSEX);
 
 		_responses.emplace_back(std::move(ev));
@@ -756,8 +764,10 @@ bool Microcontroller::sendSysex(const synthLib::SysexBuffer& _data, std::vector<
 	{
 		for (uint32_t i=0; i<m_globalSettings.size(); ++i)
 		{
-			if(m_globalSettings[i] <= 0xff)
-				buildGlobalResponse(static_cast<uint8_t>(i));
+			const auto value = !m_rom.isTIFamily() && i == g_singleBankParameter ? m_currentBank
+				: !m_rom.isTIFamily() && i == g_singleProgramParameter ? m_currentSingle : m_globalSettings[i];
+			if(value <= 0xff)
+				buildGlobalResponse(static_cast<uint8_t>(i), value);
 		}
 	};
 
@@ -773,7 +783,7 @@ bool Microcontroller::sendSysex(const synthLib::SysexBuffer& _data, std::vector<
 	{
 		// If we are in multi mode, we return the Single mode single first. If in single mode, it is returned last.
 		// The reason is that we want to backup everything but the last loaded multi/single defines the play mode when restoring
-		const bool isMultiMode = m_globalSettings[PLAY_MODE] == PlayModeMulti;
+		const bool isMultiMode = m_globalSettings[PLAY_MODE] == PlayModeMulti || m_globalSettings[PLAY_MODE] == PlayModeMultiSingle;
 
 		if(isMultiMode)
 			buildSingleResponse(BankNumber::EditBuffer, SINGLE);
@@ -854,6 +864,11 @@ bool Microcontroller::sendSysex(const synthLib::SysexBuffer& _data, std::vector<
 					return enqueue();
 				const uint8_t program = _data[8];
 				LOG("Request Single, Bank " << (int)toMidiByte(bank) << ", program " << (int)program);
+				if(!m_rom.isTIFamily() && bank == BankNumber::EditBuffer && program == SINGLE)
+				{
+					buildGlobalResponse(g_singleBankParameter, m_currentBank);
+					buildGlobalResponse(g_singleProgramParameter, m_currentSingle);
+				}
 				buildSingleResponse(bank, program);
 				break;
 			}
@@ -918,6 +933,33 @@ bool Microcontroller::sendSysex(const synthLib::SysexBuffer& _data, std::vector<
 				auto part = _data[7];
 				const auto param = _data[8];
 				const auto value = _data[9];
+
+				// A catalogue SINGLE was loaded as an edit-buffer dump by the editor.
+				// Synchronize only its source position and acknowledge C102; no preset load.
+				if(!m_rom.isTIFamily() && page == PAGE_C && param == g_singleProgramParameter
+					&& part == 0 && _source == MidiEventSource::Editor && m_globalSettings[PLAY_MODE] == PlayModeSingle)
+				{
+					if(value >= m_rom.getPresetsPerBank())
+						return false;
+					m_currentSingle = value;
+					buildGlobalResponse(g_singleProgramParameter, m_currentSingle);
+					return true;
+				}
+
+				// Restore position only; the arrangement restores the saved edit buffer.
+				if(!m_rom.isTIFamily() && page == PAGE_C && _source == MidiEventSource::Internal && m_loadingState)
+				{
+					if(param == g_singleBankParameter)
+					{
+						if(value < m_singles.size()) m_currentBank = value;
+						return true;
+					}
+					if(param == g_singleProgramParameter)
+					{
+						if(value < m_rom.getPresetsPerBank()) m_currentSingle = value;
+						return true;
+					}
+				}
 
 				if(page == globalSettingsPage() && param == PLAY_MODE)
 				{
@@ -1209,6 +1251,10 @@ bool Microcontroller::loadMulti(uint8_t _program, const TPreset& _multi)
 	if(!writeMulti(BankNumber::EditBuffer, _program, _multi))
 		return false;
 
+	// Keep the actual selected ABC program in the existing global-state responses.
+	if(!m_rom.isTIFamily())
+		m_globalSettings[MULTI_PROGRAM_CHANGE] = _program;
+
 	for (uint8_t p = 0; p < 16; ++p)
 		loadMultiSingle(p, _multi);
 
@@ -1315,12 +1361,16 @@ bool Microcontroller::setState(const std::vector<synthLib::SMidiEvent>& _events)
 	m_loadingState = true;
 
 	std::vector<SMidiEvent> unusedResponses;
+	bool restoreMultiSingle = false;
 
 	for (const auto& event : _events)
 	{
 		if(!event.sysex.empty())
 		{
-			sendSysex(event.sysex, unusedResponses, MidiEventSource::Internal);
+			const auto accepted = sendSysex(event.sysex, unusedResponses, MidiEventSource::Internal);
+			// Arrangement buffers can change the mode after the saved globals were read.
+			if(accepted && event.sysex.size() == 11 && event.sysex[6] == globalSettingsPage() && event.sysex[8] == PLAY_MODE)
+				restoreMultiSingle = event.sysex[9] == PlayModeMultiSingle;
 			unusedResponses.clear();
 		}
 		else
@@ -1328,6 +1378,9 @@ bool Microcontroller::setState(const std::vector<synthLib::SMidiEvent>& _events)
 			sendMIDI(event);
 		}
 	}
+
+	if(restoreMultiSingle)
+		sendControlCommand(PLAY_MODE, PlayModeMultiSingle);
 
 	m_loadingState = false;
 

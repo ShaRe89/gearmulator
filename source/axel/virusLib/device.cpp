@@ -211,8 +211,8 @@ namespace virusLib
 		}
 		else
 		{
-			m_frontpanelStateDSP.updateLfoPhaseFromTimer(m_dsp->getDSP(), 0, 2);	// TIMER 1 = ACI = LFO 1 LED
-			m_frontpanelStateDSP.updateLfoPhaseFromTimer(m_dsp->getDSP(), 1, 1);	// TIMER 2 = ADO = LFO 2/3 LED
+			m_frontpanelStateDSP.updateLfoPhaseFromTimer(m_dsp->getDSP(), 0, 1);	// TIMER 1 = ACI = LFO 1 LED
+			m_frontpanelStateDSP.updateLfoPhaseFromTimer(m_dsp->getDSP(), 1, 2);	// TIMER 2 = ADO = LFO 2/3 LED
 
 			if(m_rom.getModel() == DeviceModel::C)
 				m_frontpanelStateDSP.m_bpm = m_mc->getBpmLedOn() ? 1.0f : 0.0f;

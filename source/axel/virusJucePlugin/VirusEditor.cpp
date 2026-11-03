@@ -24,10 +24,13 @@
 #include "juceRmlUi/rmlEventListener.h"
 #include "juceRmlUi/rmlHelper.h"
 #include "juceRmlUi/rmlInplaceEditor.h"
+#include "juceRmlUi/juceRmlComponent.h"
 
 #include "juceUiLib/messageBox.h"
 
 #include "RmlUi/Core/ElementDocument.h"
+#include "RmlUi/Core/CoreInstance.h"
+#include "RmlUi/Lua/IncludeLua.h"
 
 namespace genericVirusUI
 {
@@ -44,6 +47,78 @@ namespace genericVirusUI
 
 		m_parts.reset(new Parts(*this));
 		m_leds.reset(new Leds(*this, m_processor));
+
+		// Virus-specific Lua access; the controller outlives this editor's Lua context.
+		{
+			const juceRmlUi::RmlInterfaces::ScopedAccess access(*getRmlComponent());
+			if(auto* L = getDocument()->GetCoreInstance().lua_state)
+			{
+				lua_getglobal(L, "params");
+				if(lua_istable(L, -1))
+				{
+					lua_pushlightuserdata(L, &getController());
+					lua_pushcclosure(L, [](lua_State* state) -> int
+					{
+						auto& controller = *static_cast<virus::Controller*>(lua_touserdata(state, lua_upvalueindex(1)));
+						const auto direction = luaL_checkinteger(state, 1);
+						const auto* modeParam = controller.getParameter(virus::g_paramPlayMode, 0);
+						const auto mode = modeParam ? modeParam->getUnnormalizedValue() : -1;
+						const auto part = controller.getCurrentPart();
+						const auto* bankParam = controller.getParameter(mode == 0 ? "C_Undefined101" : "Part Bank Select", mode == 0 ? 0 : part);
+						const auto* programParam = controller.getParameter(mode == 0 ? "C_Undefined102" : "Part Program Change", mode == 0 ? 0 : part);
+						bool changed = false;
+						if((direction == -1 || direction == 1) && (mode == 0 || mode == 1 || mode == 2)
+							&& part < controller.getPartCount() && (mode != 0 || part == 0) && bankParam && programParam)
+						{
+							const auto bank = bankParam->getUnnormalizedValue();
+							if(bank >= 0 && static_cast<uint32_t>(bank) < controller.getBankCount())
+							{
+								// OS6.6 4652/4685: adjacent bank, same program, no wrap.
+								const auto target = static_cast<int>(bank) + static_cast<int>(direction);
+								const auto program = programParam->getUnnormalizedValue();
+								if(target >= 0 && static_cast<uint32_t>(target) < controller.getBankCount()
+									&& program >= 0 && static_cast<size_t>(program) < controller.getSinglePresets()[target].size())
+								{
+									controller.setCurrentPartPreset(part, virusLib::fromArrayIndex(static_cast<uint8_t>(target)), static_cast<uint8_t>(program));
+									changed = true;
+								}
+							}
+						}
+						lua_pushboolean(state, changed);
+						return 1;
+					}, 1);
+					lua_setfield(L, -2, "stepSingleBank");
+					lua_pushlightuserdata(L, &getController());
+					lua_pushcclosure(L, [](lua_State* state) -> int
+					{
+						auto& controller = *static_cast<virus::Controller*>(lua_touserdata(state, lua_upvalueindex(1)));
+						const auto direction = luaL_checkinteger(state, 1);
+						const auto* mode = controller.getParameter(virus::g_paramPlayMode, 0);
+						auto* program = controller.getParameter("Multi Program Change", 0);
+						if((direction != -1 && direction != 1) || !mode || mode->getUnnormalizedValue() != 2 || !program)
+						{
+							lua_pushboolean(state, false);
+							return 1;
+						}
+						const auto target = program->getUnnormalizedValue() + static_cast<int>(direction);
+						const bool changed = target >= 0 && target <= 127
+							&& controller.sendParameterChange(virusLib::PARAM_CHANGE_C, 0, virusLib::MULTI_PROGRAM_CHANGE, static_cast<uint8_t>(target));
+						if(changed)
+						{
+							program->setValueFromSynth(target, pluginLib::Parameter::Origin::PresetChange);
+							// A new native MULTI replaces all part buffers, including browser patches.
+							for(uint8_t part = 0; part < controller.getPartCount(); ++part)
+								controller.setCurrentPartPresetSource(part, virus::Controller::PresetSource::Unknown);
+							controller.requestArrangement();
+						}
+						lua_pushboolean(state, changed);
+						return 1;
+					}, 1);
+					lua_setfield(L, -2, "stepMultiProgram");
+				}
+				lua_pop(L, 1);
+			}
+		}
 
 		m_presetName = findChild("PatchName");
 
