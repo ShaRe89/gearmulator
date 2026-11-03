@@ -173,6 +173,7 @@ namespace pluginLib::patchManager
 
 	bool PatchManager::selectPatch(const uint32_t _part, const int _offset)
 	{
+		preparePatchNavigation(_part);
 		auto [patch, _] = m_state.getNeighbourPreset(_part, _offset);
 
 		if(!patch)
@@ -548,7 +549,15 @@ namespace pluginLib::patchManager
 				});
 			}
 
-			const auto currentPatch = results.front();
+			auto currentPatch = results.front();
+			for(const auto& candidate : results)
+			{
+				if(preferMatchingPatch(candidate, _part))
+				{
+					currentPatch = candidate;
+					break;
+				}
+			}
 
 			const auto key = patchDB::PatchKey(*currentPatch);
 

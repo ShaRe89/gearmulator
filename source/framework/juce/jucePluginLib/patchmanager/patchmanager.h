@@ -123,6 +123,8 @@ namespace pluginLib::patchManager
 
 		void onLoadFinished() override;
 
+		virtual bool preferMatchingPatch(const patchDB::PatchPtr& _patch, uint32_t _part) const { return false; }
+		virtual void preparePatchNavigation(uint32_t _part) {}
 		void updateStateAsync(uint32_t _part, const patchDB::PatchPtr& _patch);
 
 		patchDB::SearchHandle getSearchHandle(const patchDB::DataSource& _ds, bool _selectTreeItem);

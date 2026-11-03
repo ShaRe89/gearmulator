@@ -953,6 +953,38 @@ namespace genericVirusUI
 		return true;
 	}
 
+	void PatchManager::preparePatchNavigation(const uint32_t _part)
+	{
+		if(m_controller.isMultiMode() || virusLib::isTIFamily(m_processor.getModel()) || !getState().isValid(_part))
+			return;
+		const auto current = getState().getPatch(_part);
+		const auto bank = m_controller.getCurrentPartBank(_part);
+		if(bank == virusLib::BankNumber::EditBuffer)
+			return;
+		const auto handle = getSearchHandle(createDataSource(virusLib::toArrayIndex(bank)), false);
+		const auto search = getSearch(handle);
+		if(!search)
+			return;
+		std::shared_lock lock(search->resultsMutex);
+		for(const auto& candidate : search->results)
+		{
+			if(candidate->hash == current.hash && preferMatchingPatch(candidate, _part))
+			{
+				getMutableState().setSelectedPatch(_part, pluginLib::patchDB::PatchKey(*candidate), handle);
+				return;
+			}
+		}
+	}
+
+	bool PatchManager::preferMatchingPatch(const pluginLib::patchDB::PatchPtr& _patch, const uint32_t _part) const
+	{
+		if(m_controller.isMultiMode() || virusLib::isTIFamily(m_processor.getModel()))
+			return false;
+		const auto source = _patch->source.lock();
+		return source && source->type == pluginLib::patchDB::SourceType::Rom
+			&& _patch->bank == virusLib::toMidiByte(m_controller.getCurrentPartBank(_part));
+	}
+
 	bool PatchManager::activatePatch(const pluginLib::patchDB::PatchPtr& _patch, const uint32_t _part)
 	{
 		const auto sysex = applyModifications(_patch, pluginLib::FileType::Empty, pluginLib::ExportType::EmuHardware);
