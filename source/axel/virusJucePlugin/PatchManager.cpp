@@ -160,7 +160,22 @@ namespace genericVirusUI
 
 			const auto& banks = m_controller.getSinglePresets();
 
-			if (index < banks.size() && _program == banks[index].size() - 1)
+			if (index >= banks.size() || _program >= banks[index].size())
+				return;
+
+			const auto& bank = banks[index];
+			// Do not publish a partial bank: the database assigns programs by list position.
+			if (std::any_of(bank.begin(), bank.end(), [](const auto& patch) { return patch.data.empty(); }))
+				return;
+
+			{
+				std::lock_guard lock(m_ramBanksMutex);
+				const auto& cached = m_ramBanks[index];
+				// A single-preset readback can change any RAM slot, not just the last bank reply.
+				if (cached.size() == bank.size() && cached[_program] == bank[_program].data)
+					return;
+			}
+
 			{
 				updateRamBank(index);
 				// a refresh keeps the data source, with the MIDI bank number the user gave it

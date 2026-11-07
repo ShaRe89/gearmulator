@@ -79,6 +79,10 @@ namespace virus
         synthLib::SysexBuffer createSingleDump(MidiPacketType _packet, uint8_t _bank, uint8_t _program, const pluginLib::MidiPacket::AnyPartParamValues& _paramValues);
         synthLib::SysexBuffer modifySingleDump(const synthLib::SysexBuffer& _sysex, virusLib::BankNumber _newBank, uint8_t _newProgram) const;
 
+        // HardwareC STORE: one message-thread transaction, SINGLE -> RAM A/B only.
+        uint32_t storeSingle(int _bank, int _program, const std::string& _name);
+        const char* singleStoreStatus(uint32_t _token, bool _cancel = false);
+
     	void selectPrevPreset(uint8_t _part);
     	void selectNextPreset(uint8_t _part);
         std::string getBankName(uint32_t _index) const;
@@ -191,6 +195,15 @@ namespace virus
 
     private:
 		void handleAsyncUpdate() override;
+
+        enum class SingleStorePhase { Idle, Protect, Readback, Stored, Protected, Failed };
+        void receiveSingleStore(const pluginLib::SysEx& _msg, synthLib::MidiEventSource _source);
+        bool singleStoreContextValid() const;
+        SingleStorePhase m_singleStorePhase = SingleStorePhase::Idle;
+        uint32_t m_singleStoreToken = 0;
+        double m_singleStoreStarted = 0;
+        const char* m_singleStoreError = "STORE REJECTED";
+        synthLib::SysexBuffer m_singleStoreDump;
 
         Singles m_singles;
         SinglePatch m_singleEditBuffer;                     // single mode

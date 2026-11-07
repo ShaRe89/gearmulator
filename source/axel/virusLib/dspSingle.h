@@ -11,6 +11,7 @@
 #include <atomic>
 #include <functional>
 #include <mutex>
+#include <cstdint>
 
 namespace dsp56k
 {

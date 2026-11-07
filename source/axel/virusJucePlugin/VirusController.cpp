@@ -102,6 +102,8 @@ namespace virus
 		{
 			m_onRomChanged = [this](uint32_t)
 			{
+                m_singleStoreError = "FIRMWARE CHANGED";
+                m_singleStorePhase = SingleStorePhase::Failed;
 				requestRomBanks();
 			};
 		}
@@ -164,6 +166,7 @@ namespace virus
 		        LOG("Controller: End unhandled SysEx! --");
 				return false;
             }
+			receiveSingleStore(_msg, _source);
 			return true;
         }
 
@@ -644,7 +647,31 @@ namespace virus
 
                 const auto& desc = param->getDescription();
 
-                if(desc.page != virusLib::PAGE_C && desc.page != globalPage)
+                // The Virus C multi packet names these bytes as A/B parameters. HardwareC
+                // reads their separate C context; initialize it without writing to the synth.
+                if(m_processor.getModel() == virusLib::DeviceModel::C)
+                {
+                    int multiIndex = -1;
+                    if(desc.page == virusLib::PAGE_A && desc.index >= 112 && desc.index <= 119)
+                    {
+                        constexpr uint8_t indices[] = {16, 42, 17, 18, 19, 20, 21, 24};
+                        multiIndex = indices[desc.index - 112];
+                    }
+                    else if(desc.page == virusLib::PAGE_B && desc.index == 20)
+                        multiIndex = 23;
+                    if(multiIndex >= 0)
+                    {
+                        const auto first = rawPart == pluginLib::MidiPacket::AnyPart ? 0 : part;
+                        const auto end = rawPart == pluginLib::MidiPacket::AnyPart ? getPartCount() : part + 1;
+                        for(auto p = first; p < end; ++p)
+                            for(auto* target : findSynthParam(static_cast<uint8_t>(p), virusLib::PAGE_C, static_cast<uint8_t>(multiIndex)))
+                                target->setValueFromSynth(value, pluginLib::Parameter::Origin::PresetChange);
+                    }
+                }
+
+                const bool abcClockTempo = !virusLib::isTIFamily(m_processor.getModel())
+                    && desc.page == virusLib::PAGE_B && desc.index == virusLib::CLOCK_TEMPO;
+                if(desc.page != virusLib::PAGE_C && desc.page != globalPage && !abcClockTempo)
                     continue;
 
                 param->setValueFromSynth(value, pluginLib::Parameter::Origin::PresetChange);
@@ -893,6 +920,141 @@ namespace virus
         if(!m->create(dst, data, paramValues))
             return {};
         return dst;
+    }
+
+    bool Controller::singleStoreContextValid() const
+    {
+        const auto* mode = getParameter(g_paramPlayMode, 0);
+        const auto* protect = getParameter("Memory Protect", 0);
+        return m_processor.getModel() == virusLib::DeviceModel::C && getCurrentPart() == 0
+            && mode && mode->getUnnormalizedValue() == 0
+            && protect && protect->getUnnormalizedValue() == 0;
+    }
+
+    uint32_t Controller::storeSingle(const int _bank, const int _program, const std::string& _name)
+    {
+        const auto reject = [this](const char* _reason) -> uint32_t { m_singleStoreError = _reason; return 0; };
+        if(m_singleStorePhase == SingleStorePhase::Protect || m_singleStorePhase == SingleStorePhase::Readback)
+            return reject("STORE BUSY");
+        if(!singleStoreContextValid())
+            return reject("CONTEXT INVALID");
+        if(_bank < 0 || _bank > 1 || _program < 0 || _program > 127 || static_cast<size_t>(_bank) >= m_singles.size())
+            return reject("INVALID TARGET");
+        if(_name.size() != kNameLength)
+            return reject("INVALID NAME");
+
+        const auto* packet = getMidiPacket(midiPacketName(MidiPacketType::SingleDump));
+        if(!packet)
+            return reject("DUMP TYPE MISSING");
+        auto dump = createSingleDump(0, virusLib::toMidiByte(virusLib::fromArrayIndex(static_cast<uint8_t>(_bank))),
+            static_cast<uint8_t>(_program));
+        if(dump.size() != packet->size())
+            return reject("DUMP CREATE ERROR");
+        for(size_t i = 0; i < kNameLength; ++i)
+        {
+            const auto value = static_cast<uint8_t>(_name[i]);
+            const auto offset = packet->getByteIndexForParameterName("SingleName" + std::to_string(i));
+            if(value < 0x20 || value > 0x7f || offset == pluginLib::MidiPacket::InvalidIndex || offset >= dump.size())
+                return reject("NAME BYTE INVALID");
+            dump[offset] = value; // Only the outgoing copy; never set a live name parameter.
+        }
+        if(!packet->updateChecksums(dump))
+            return reject("CHECKSUM ERROR");
+
+        m_singleStoreDump = std::move(dump);
+        m_singleStoreToken = m_singleStoreToken >= 0x7fffffff ? 1 : m_singleStoreToken + 1;
+        m_singleStoreStarted = juce::Time::getMillisecondCounterHiRes();
+        m_singleStorePhase = SingleStorePhase::Protect;
+        // A GUI fallback 0 is not proof: require a fresh raw C118 reply from the device.
+        // REQUEST_GLOBAL is read-only and omits unknown MC global settings.
+        if(!sendSysEx(MidiPacketType::RequestGlobal))
+        {
+            m_singleStoreError = "C118 REQUEST ERROR";
+            m_singleStorePhase = SingleStorePhase::Failed;
+        }
+        return m_singleStoreToken;
+    }
+
+    const char* Controller::singleStoreStatus(const uint32_t _token, const bool _cancel)
+    {
+        if(!_token)
+            return m_singleStoreError; // Immediate rejection, before a transaction was created.
+        if(_token != m_singleStoreToken)
+            return "INVALID TOKEN";
+        if(_cancel)
+        {
+            m_singleStoreError = "STORE CANCELLED";
+            m_singleStorePhase = SingleStorePhase::Failed;
+        }
+        else if(m_singleStorePhase == SingleStorePhase::Protect || m_singleStorePhase == SingleStorePhase::Readback)
+        {
+            if(juce::Time::getMillisecondCounterHiRes() - m_singleStoreStarted > 5000)
+            {
+                m_singleStoreError = m_singleStorePhase == SingleStorePhase::Protect ? "C118 NO REPLY" : "READBACK TIMEOUT";
+                m_singleStorePhase = SingleStorePhase::Failed;
+            }
+            else if(!singleStoreContextValid())
+            {
+                m_singleStoreError = "CONTEXT CHANGED";
+                m_singleStorePhase = SingleStorePhase::Failed;
+            }
+        }
+        switch(m_singleStorePhase)
+        {
+        case SingleStorePhase::Protect:
+        case SingleStorePhase::Readback: return "pending";
+        case SingleStorePhase::Stored: return "stored";
+        case SingleStorePhase::Protected: return "protected";
+        default: return m_singleStoreError;
+        }
+    }
+
+    void Controller::receiveSingleStore(const pluginLib::SysEx& _msg, const synthLib::MidiEventSource _source)
+    {
+        if(_source != synthLib::MidiEventSource::Device
+            || (m_singleStorePhase != SingleStorePhase::Protect && m_singleStorePhase != SingleStorePhase::Readback))
+            return;
+
+        const bool protectReply = _msg.size() == 11 && _msg[6] == virusLib::PAGE_C && _msg[7] == 0 && _msg[8] == 118;
+        if(protectReply && _msg[9] != 0)
+        {
+            m_singleStoreError = "PROTECT CHANGED";
+            // A later protect change cannot undo an already submitted RAM write.
+            m_singleStorePhase = m_singleStorePhase == SingleStorePhase::Protect
+                ? SingleStorePhase::Protected : SingleStorePhase::Failed;
+            return;
+        }
+        if(std::string(singleStoreStatus(m_singleStoreToken)) != "pending")
+            return;
+
+        if(protectReply)
+        {
+            // ROM blocks 2, JSON represents only 0/1. Never infer 1 -> 2 or accept a clamped GUI value.
+            if(m_singleStorePhase != SingleStorePhase::Protect)
+                return;
+            m_singleStorePhase = SingleStorePhase::Readback;
+            sendSysEx(m_singleStoreDump);
+            // Same MIDI queue: the target request follows the RAM write, never a cached catalogue lookup.
+            if(!requestSingle(m_singleStoreDump[7], m_singleStoreDump[8]))
+            {
+                m_singleStoreError = "READBACK REQ ERROR";
+                m_singleStorePhase = SingleStorePhase::Failed;
+            }
+            return;
+        }
+
+        if(m_singleStorePhase != SingleStorePhase::Readback || _msg.size() != m_singleStoreDump.size()
+            || _msg[6] != virusLib::DUMP_SINGLE || _msg[7] != m_singleStoreDump[7] || _msg[8] != m_singleStoreDump[8])
+            return;
+
+        const auto* packet = getMidiPacket(midiPacketName(MidiPacketType::SingleDump));
+        pluginLib::MidiPacket::Data data;
+        pluginLib::MidiPacket::ParamValues values;
+        // Unlike the general preset parser, STORE never ignores a checksum error.
+        const bool valid = packet && packet->parse(data, values, getParameterDescriptions(), _msg, false);
+        m_singleStoreError = valid ? "READBACK MISMATCH" : "READBACK CHECKSUM";
+        // Covers destination, all ten raw name bytes and the entire sound, not just a name match.
+        m_singleStorePhase = valid && _msg == m_singleStoreDump ? SingleStorePhase::Stored : SingleStorePhase::Failed;
     }
 
     synthLib::SysexBuffer Controller::modifySingleDump(const synthLib::SysexBuffer& _sysex, const virusLib::BankNumber _newBank, const uint8_t _newProgram) const

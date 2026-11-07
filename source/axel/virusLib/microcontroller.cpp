@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <vector>
 #include <thread>
 #include <cstring>	// memcpy
@@ -269,6 +270,53 @@ void Microcontroller::createDefaultState()
 		writeSingle(BankNumber::EditBuffer, SINGLE, m_singleEditBuffer);
 	else
 		loadMulti(0, m_multiEditBuffer);
+
+	// Complete the emulated controller globals once, after the existing DSP init.
+	// Never run on restore or send extra DSP/preset commands. Keep unknowns for
+	// unsupported ROM layouts rather than inventing defaults from JSON minima.
+	const auto& rom = m_rom.getRomFileData();
+	if(m_rom.getModel() != DeviceModel::C || rom.size() != ROMFile::getRomSizeModelABC())
+		return;
+	const auto matches = [&rom](const size_t _offset, const std::initializer_list<uint8_t> _bytes)
+	{
+		return _offset <= rom.size() && _bytes.size() <= rom.size() - _offset
+			&& std::equal(_bytes.begin(), _bytes.end(), rom.begin() + _offset);
+	};
+	// OS6.6 reset copy, direct reader, KnobDispl reader and assignment inverse lookup.
+	if(!matches(0x6b6a, {0x74,0x10,0x12,0x1e,0x23,0x78,0x00,0x90,0x80,0x00,0xe8,0xb8,0x80,0x00,
+		0x50,0x01,0x93,0x90,0x24,0x00,0x88,0x82,0xc2,0xe7,0xf0,0x08,0xe8,0x70,0xea})
+		|| !matches(0x153f, {0x90,0x24,0x00,0x85,0x53,0x82,0xe0,0xf5,0x54,0x22})
+		|| !matches(0x1519, {0x90,0x24,0x61,0xe0,0xb4,0x63,0x00,0x40,0x05,0x74,0x03,0xf5,0x54,0x22,
+			0xb4,0x32,0x00,0x40,0x05,0x74,0x02,0xf5,0x54,0x22,0xb4,0x03,0x00,0x40,0x05,0x74,0x01,0xf5,0x54,0x22,0xe4,0xf5,0x54,0x22})
+		|| !matches(0x155e, {0x90,0x83,0xc8,0x02,0x1e,0x63})
+		|| !matches(0x1564, {0x12,0x15,0x3f,0x80,0xf5})
+		|| !matches(0x1e63, {0x74,0x10,0x12,0x1e,0x23,0xe5,0x54,0x75,0xf0,0x00,0xe5,0xf0,0x93,0xb5,0x54,0x05,
+			0xe5,0xf0,0xf5,0x54,0x22,0x05,0xf0,0x30,0xf7,0xf0,0xe4,0xf5,0x54,0x22}))
+		return;
+
+	std::lock_guard lock(m_mutex);
+	for(const auto param : g_pageC_global)
+	{
+		if(m_globalSettings[param] != 0xffffffff)
+			continue; // Existing init values (or any explicit value) retain priority.
+		auto value = static_cast<uint8_t>(rom[0x8000 + param] & 0x7f);
+		const auto reader = rom[0xf823 + param]; // F822 begins with the length byte.
+		if(param == MULTI_PROGRAM_CHANGE || param == 123)
+			value = 0; // Constructor loaded MULTI 0; the virtual editor starts at part 0.
+		else if(param == 97 && reader == 0x02)
+			value = value >= 99 ? 3 : value >= 50 ? 2 : value >= 3 ? 1 : 0;
+		else if((param == 112 || param == 113) && reader == 0x10)
+		{
+			const auto first = rom.begin() + 0x83c8;
+			const auto found = std::find(first, first + 128, value);
+			if(found == first + 128 || found - first > 117)
+				continue;
+			value = static_cast<uint8_t>(found - first);
+		}
+		else if(reader != 0x0d)
+			continue;
+		m_globalSettings[param] = value;
+	}
 }
 
 void Microcontroller::writeHostBitsWithWait(const uint8_t flag0, const uint8_t flag1)
@@ -504,7 +552,7 @@ void Microcontroller::getArpeggiatorSingles(std::array<const TPreset*, 16>& _sin
 
 bool Microcontroller::isMultiPartParameter(const uint8_t _param)
 {
-	return (_param >= PART_BANK_SELECT && _param <= PART_OUTPUT_SELECT) || (_param >= PART_ENABLE && _param <= PART_PROG_CHANGE_ENABLE);
+	return (_param >= PART_BANK_SELECT && _param <= PART_OUTPUT_SELECT) || _param == PART_EFFECT_SEND || (_param >= PART_ENABLE && _param <= PART_PROG_CHANGE_ENABLE);
 }
 
 bool Microcontroller::send(const Page _page, const uint8_t _part, const uint8_t _param, const uint8_t _value)
@@ -1650,6 +1698,28 @@ void Microcontroller::applyToMultiEditBuffer(const Page _page, const uint8_t _pa
 		{
 			const auto idx = MD_PART_MIDI_CHANNEL + ((_param-PART_MIDI_CHANNEL)*16) + _part;
 			m_multiEditBuffer[idx] = _value;
+		}
+		else if (_param == PART_EFFECT_SEND)
+		{
+			if (_part < 16)
+				m_multiEditBuffer[MD_PART_EFFECT_SEND + _part] = _value;
+		}
+		else
+		{
+			// These shared PAGE_C effect indices match their multi dump offsets.
+			switch (_param)
+			{
+			case MD_DELAY_MODE:
+			case MD_DELAY_TIME:
+			case MD_DELAY_FEEDBACK:
+			case MD_DELAY_RATE:
+			case MD_DELAY_DEPTH:
+			case MD_DELAY_SHAPE:
+			case MD_DELAY_CLOCK:
+			case MD_DELAY_COLOR:
+				m_multiEditBuffer[_param] = _value;
+				break;
+			}
 		}
 		break;
 	}
