@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <optional>
 
 #include "jucePluginLib/parameterdescriptions.h"
 #include "jucePluginLib/controller.h"
@@ -79,9 +80,11 @@ namespace virus
         synthLib::SysexBuffer createSingleDump(MidiPacketType _packet, uint8_t _bank, uint8_t _program, const pluginLib::MidiPacket::AnyPartParamValues& _paramValues);
         synthLib::SysexBuffer modifySingleDump(const synthLib::SysexBuffer& _sysex, virusLib::BankNumber _newBank, uint8_t _newProgram) const;
 
-        // HardwareC STORE: one message-thread transaction, SINGLE -> RAM A/B only.
-        uint32_t storeSingle(int _bank, int _program, const std::string& _name);
+        // Omitted source: SINGLE/part 0. Explicit source: MULTI SINGLE/selected part.
+        uint32_t storeSingle(int _bank, int _program, const std::string& _name, std::optional<int> _sourcePart = std::nullopt);
         const char* singleStoreStatus(uint32_t _token, bool _cancel = false);
+        uint32_t storeMulti(int _program, const std::string& _name);
+        const char* multiStoreStatus(uint32_t _token, bool _cancel = false);
 
     	void selectPrevPreset(uint8_t _part);
     	void selectNextPreset(uint8_t _part);
@@ -198,12 +201,26 @@ namespace virus
 
         enum class SingleStorePhase { Idle, Protect, Readback, Stored, Protected, Failed };
         void receiveSingleStore(const pluginLib::SysEx& _msg, synthLib::MidiEventSource _source);
-        bool singleStoreContextValid() const;
+        bool singleStoreContextValid(int _expectedMode, int _sourcePart) const;
         SingleStorePhase m_singleStorePhase = SingleStorePhase::Idle;
         uint32_t m_singleStoreToken = 0;
+        int m_singleStoreMode = 0;
+        int m_singleStorePart = 0;
         double m_singleStoreStarted = 0;
         const char* m_singleStoreError = "STORE REJECTED";
         synthLib::SysexBuffer m_singleStoreDump;
+
+        enum class MultiStorePhase { Idle, Source, Protect, Readback, Stored, Protected, Failed };
+        void receiveMultiStore(const pluginLib::SysEx& _msg, synthLib::MidiEventSource _source);
+        bool multiStoreContextValid() const;
+        MultiStorePhase m_multiStorePhase = MultiStorePhase::Idle;
+        uint32_t m_multiStoreToken = 0;
+        int m_multiStorePart = 0;
+        int m_multiStoreProgram = 0;
+        double m_multiStoreStarted = 0;
+        const char* m_multiStoreError = "STORE REJECTED";
+        std::string m_multiStoreName;
+        synthLib::SysexBuffer m_multiStoreDump;
 
         Singles m_singles;
         SinglePatch m_singleEditBuffer;                     // single mode

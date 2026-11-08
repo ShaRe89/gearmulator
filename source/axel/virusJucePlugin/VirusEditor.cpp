@@ -123,10 +123,14 @@ namespace genericVirusUI
 						const auto program = luaL_checkinteger(state, 2);
 						size_t length = 0;
 						const auto* name = luaL_checklstring(state, 3, &length);
+						const bool hasSourcePart = !lua_isnoneornil(state, 4);
+						const auto sourcePart = hasSourcePart ? luaL_checkinteger(state, 4) : 0;
 						// Validate before narrowing Lua integers. The controller validates again.
-						const bool validDraft = bank >= 0 && bank <= 1 && program >= 0 && program <= 127 && length == 10;
+						const bool validDraft = bank >= 0 && bank <= 1 && program >= 0 && program <= 127 && length == 10
+							&& (!hasSourcePart || (sourcePart >= 0 && sourcePart <= 15));
 						const auto token = validDraft
-							? controller.storeSingle(static_cast<int>(bank), static_cast<int>(program), std::string(name, length)) : 0;
+							? controller.storeSingle(static_cast<int>(bank), static_cast<int>(program), std::string(name, length),
+								hasSourcePart ? std::optional<int>(static_cast<int>(sourcePart)) : std::nullopt) : 0;
 						lua_pushinteger(state, token);
 						lua_pushstring(state, token ? "pending" : validDraft ? controller.singleStoreStatus(0) : "INVALID DRAFT");
 						return 2;
@@ -142,6 +146,31 @@ namespace genericVirusUI
 						return 1;
 					}, 1);
 					lua_setfield(L, -2, "singleStoreStatus");
+                    lua_pushlightuserdata(L, &getController());
+                    lua_pushcclosure(L, [](lua_State* state) -> int
+                    {
+                        auto& controller = *static_cast<virus::Controller*>(lua_touserdata(state, lua_upvalueindex(1)));
+                        const auto program = luaL_checkinteger(state, 1);
+                        size_t length = 0;
+                        const auto* name = luaL_checklstring(state, 2, &length);
+                        const bool validDraft = program >= 0 && program <= 127 && length == 10;
+                        const auto token = validDraft
+                            ? controller.storeMulti(static_cast<int>(program), std::string(name, length)) : 0;
+                        lua_pushinteger(state, token);
+                        lua_pushstring(state, token ? "pending" : validDraft ? controller.multiStoreStatus(0) : "INVALID DRAFT");
+                        return 2;
+                    }, 1);
+                    lua_setfield(L, -2, "storeMulti");
+                    lua_pushlightuserdata(L, &getController());
+                    lua_pushcclosure(L, [](lua_State* state) -> int
+                    {
+                        auto& controller = *static_cast<virus::Controller*>(lua_touserdata(state, lua_upvalueindex(1)));
+                        const auto token = luaL_checkinteger(state, 1);
+                        lua_pushstring(state, token > 0 && token <= 0x7fffffff
+                            ? controller.multiStoreStatus(static_cast<uint32_t>(token), lua_toboolean(state, 2) != 0) : "failed");
+                        return 1;
+                    }, 1);
+                    lua_setfield(L, -2, "multiStoreStatus");
 				}
 				lua_pop(L, 1);
 			}

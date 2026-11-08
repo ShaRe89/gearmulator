@@ -1013,11 +1013,24 @@ namespace genericVirusUI
 			return activateArrangement(sysex);
 		case PatchType::Single:
 			{
+				const auto source = _patch->source.lock();
+				const auto* mode = m_controller.getParameter("Play Mode", 0);
+				if(mode && mode->getUnnormalizedValue() == 1 && !virusLib::isTIFamily(m_processor.getModel())
+					&& source && source->type == pluginLib::patchDB::SourceType::Rom
+					&& _part < m_controller.getPartCount()
+					&& _patch->bank > 0 && _patch->bank <= m_controller.getBankCount()
+					&& _patch->program < virusLib::ROMFile::getSinglesPerBank())
+				{
+					// A catalogue selection must update C31/C33 as well as the part buffer.
+					// The native path requests both readbacks and retains the source position.
+					m_controller.setCurrentPartPreset(static_cast<uint8_t>(_part),
+						virusLib::fromMidiByte(static_cast<uint8_t>(_patch->bank)), static_cast<uint8_t>(_patch->program));
+					return true;
+				}
 				if(!activateSingle(sysex, _part))
 					return false;
 				// The edit-buffer dump has no source program number. Retain the
 				// actual ROM/RAM catalogue position without loading the sound again.
-				const auto source = _patch->source.lock();
 				if(!m_controller.isMultiMode() && !virusLib::isTIFamily(m_processor.getModel())
 					&& source && source->type == pluginLib::patchDB::SourceType::Rom
 					&& _patch->program < virusLib::ROMFile::getSinglesPerBank()

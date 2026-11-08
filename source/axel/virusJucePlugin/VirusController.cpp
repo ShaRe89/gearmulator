@@ -104,6 +104,8 @@ namespace virus
 			{
                 m_singleStoreError = "FIRMWARE CHANGED";
                 m_singleStorePhase = SingleStorePhase::Failed;
+                m_multiStoreError = "FIRMWARE CHANGED";
+                m_multiStorePhase = MultiStorePhase::Failed;
 				requestRomBanks();
 			};
 		}
@@ -167,6 +169,7 @@ namespace virus
 				return false;
             }
 			receiveSingleStore(_msg, _source);
+            receiveMultiStore(_msg, _source);
 			return true;
         }
 
@@ -922,21 +925,29 @@ namespace virus
         return dst;
     }
 
-    bool Controller::singleStoreContextValid() const
+    bool Controller::singleStoreContextValid(const int _expectedMode, const int _sourcePart) const
     {
         const auto* mode = getParameter(g_paramPlayMode, 0);
         const auto* protect = getParameter("Memory Protect", 0);
-        return m_processor.getModel() == virusLib::DeviceModel::C && getCurrentPart() == 0
-            && mode && mode->getUnnormalizedValue() == 0
+        return m_processor.getModel() == virusLib::DeviceModel::C
+            && ((_expectedMode == 0 && _sourcePart == 0) || (_expectedMode == 1 && _sourcePart >= 0 && _sourcePart <= 15))
+            && getCurrentPart() == _sourcePart
+            && mode && mode->getUnnormalizedValue() == _expectedMode
             && protect && protect->getUnnormalizedValue() == 0;
     }
 
-    uint32_t Controller::storeSingle(const int _bank, const int _program, const std::string& _name)
+    uint32_t Controller::storeSingle(const int _bank, const int _program, const std::string& _name, const std::optional<int> _sourcePart)
     {
         const auto reject = [this](const char* _reason) -> uint32_t { m_singleStoreError = _reason; return 0; };
-        if(m_singleStorePhase == SingleStorePhase::Protect || m_singleStorePhase == SingleStorePhase::Readback)
+        if(m_singleStorePhase == SingleStorePhase::Protect || m_singleStorePhase == SingleStorePhase::Readback
+            || m_multiStorePhase == MultiStorePhase::Source || m_multiStorePhase == MultiStorePhase::Protect
+            || m_multiStorePhase == MultiStorePhase::Readback)
             return reject("STORE BUSY");
-        if(!singleStoreContextValid())
+        const auto expectedMode = _sourcePart.has_value() ? 1 : 0;
+        const auto sourcePart = _sourcePart.value_or(0);
+        if(sourcePart < 0 || sourcePart > 15)
+            return reject("INVALID SOURCE");
+        if(!singleStoreContextValid(expectedMode, sourcePart))
             return reject("CONTEXT INVALID");
         if(_bank < 0 || _bank > 1 || _program < 0 || _program > 127 || static_cast<size_t>(_bank) >= m_singles.size())
             return reject("INVALID TARGET");
@@ -946,7 +957,7 @@ namespace virus
         const auto* packet = getMidiPacket(midiPacketName(MidiPacketType::SingleDump));
         if(!packet)
             return reject("DUMP TYPE MISSING");
-        auto dump = createSingleDump(0, virusLib::toMidiByte(virusLib::fromArrayIndex(static_cast<uint8_t>(_bank))),
+        auto dump = createSingleDump(static_cast<uint8_t>(sourcePart), virusLib::toMidiByte(virusLib::fromArrayIndex(static_cast<uint8_t>(_bank))),
             static_cast<uint8_t>(_program));
         if(dump.size() != packet->size())
             return reject("DUMP CREATE ERROR");
@@ -962,6 +973,8 @@ namespace virus
             return reject("CHECKSUM ERROR");
 
         m_singleStoreDump = std::move(dump);
+        m_singleStoreMode = expectedMode;
+        m_singleStorePart = sourcePart;
         m_singleStoreToken = m_singleStoreToken >= 0x7fffffff ? 1 : m_singleStoreToken + 1;
         m_singleStoreStarted = juce::Time::getMillisecondCounterHiRes();
         m_singleStorePhase = SingleStorePhase::Protect;
@@ -993,7 +1006,7 @@ namespace virus
                 m_singleStoreError = m_singleStorePhase == SingleStorePhase::Protect ? "C118 NO REPLY" : "READBACK TIMEOUT";
                 m_singleStorePhase = SingleStorePhase::Failed;
             }
-            else if(!singleStoreContextValid())
+            else if(!singleStoreContextValid(m_singleStoreMode, m_singleStorePart))
             {
                 m_singleStoreError = "CONTEXT CHANGED";
                 m_singleStorePhase = SingleStorePhase::Failed;
@@ -1055,6 +1068,172 @@ namespace virus
         m_singleStoreError = valid ? "READBACK MISMATCH" : "READBACK CHECKSUM";
         // Covers destination, all ten raw name bytes and the entire sound, not just a name match.
         m_singleStorePhase = valid && _msg == m_singleStoreDump ? SingleStorePhase::Stored : SingleStorePhase::Failed;
+    }
+
+    bool Controller::multiStoreContextValid() const
+    {
+        const auto* mode = getParameter(g_paramPlayMode, 0);
+        const auto* protect = getParameter("Memory Protect", 0);
+        return m_processor.getModel() == virusLib::DeviceModel::C
+            && mode && mode->getUnnormalizedValue() == 2
+            && getCurrentPart() == m_multiStorePart
+            && protect && protect->getUnnormalizedValue() == 0;
+    }
+
+    uint32_t Controller::storeMulti(const int _program, const std::string& _name)
+    {
+        const auto reject = [this](const char* _reason) -> uint32_t { m_multiStoreError = _reason; return 0; };
+        if(m_multiStorePhase == MultiStorePhase::Source || m_multiStorePhase == MultiStorePhase::Protect
+            || m_multiStorePhase == MultiStorePhase::Readback
+            || m_singleStorePhase == SingleStorePhase::Protect || m_singleStorePhase == SingleStorePhase::Readback)
+            return reject("STORE BUSY");
+        if(_program < 0 || _program > 127 || _name.size() != kNameLength)
+            return reject("INVALID TARGET/NAME");
+        for(const auto ch : _name)
+            if(static_cast<uint8_t>(ch) < 0x20 || static_cast<uint8_t>(ch) > 0x7f)
+                return reject("NAME BYTE INVALID");
+        m_multiStorePart = getCurrentPart();
+        if(!multiStoreContextValid())
+            return reject("CONTEXT INVALID");
+        if(!getMidiPacket(midiPacketName(MidiPacketType::MultiDump)))
+            return reject("DUMP TYPE MISSING");
+
+        m_multiStoreProgram = _program;
+        m_multiStoreName = _name;
+        m_multiStoreDump.clear();
+        m_multiStoreToken = m_multiStoreToken >= 0x7fffffff ? 1 : m_multiStoreToken + 1;
+        m_multiStoreStarted = juce::Time::getMillisecondCounterHiRes();
+        m_multiStorePhase = MultiStorePhase::Source;
+        // Always capture a fresh device edit-buffer reply, not an editor-side cache.
+        if(!requestMulti(virusLib::toMidiByte(virusLib::BankNumber::EditBuffer), 0))
+        {
+            m_multiStoreError = "SOURCE REQ ERROR";
+            m_multiStorePhase = MultiStorePhase::Failed;
+        }
+        return m_multiStoreToken;
+    }
+
+    const char* Controller::multiStoreStatus(const uint32_t _token, const bool _cancel)
+    {
+        if(!_token)
+            return m_multiStoreError;
+        if(_token != m_multiStoreToken)
+            return "INVALID TOKEN";
+        if(_cancel)
+        {
+            m_multiStoreError = "STORE CANCELLED";
+            m_multiStorePhase = MultiStorePhase::Failed;
+        }
+        else if(m_multiStorePhase == MultiStorePhase::Source || m_multiStorePhase == MultiStorePhase::Protect
+            || m_multiStorePhase == MultiStorePhase::Readback)
+        {
+            if(juce::Time::getMillisecondCounterHiRes() - m_multiStoreStarted > 5000)
+            {
+                m_multiStoreError = m_multiStorePhase == MultiStorePhase::Source ? "SOURCE TIMEOUT"
+                    : m_multiStorePhase == MultiStorePhase::Protect ? "C118 NO REPLY" : "READBACK TIMEOUT";
+                m_multiStorePhase = MultiStorePhase::Failed;
+            }
+            else if(!multiStoreContextValid())
+            {
+                m_multiStoreError = "CONTEXT CHANGED";
+                m_multiStorePhase = MultiStorePhase::Failed;
+            }
+        }
+        switch(m_multiStorePhase)
+        {
+        case MultiStorePhase::Source:
+        case MultiStorePhase::Protect:
+        case MultiStorePhase::Readback: return "pending";
+        case MultiStorePhase::Stored: return "stored";
+        case MultiStorePhase::Protected: return "protected";
+        default: return m_multiStoreError;
+        }
+    }
+
+    void Controller::receiveMultiStore(const pluginLib::SysEx& _msg, const synthLib::MidiEventSource _source)
+    {
+        if(_source != synthLib::MidiEventSource::Device
+            || (m_multiStorePhase != MultiStorePhase::Source && m_multiStorePhase != MultiStorePhase::Protect
+                && m_multiStorePhase != MultiStorePhase::Readback))
+            return;
+        if(std::string(multiStoreStatus(m_multiStoreToken)) != "pending")
+            return;
+
+        const bool protectReply = _msg.size() == 11 && _msg[6] == virusLib::PAGE_C
+            && _msg[7] == 0 && _msg[8] == 118;
+        if(protectReply && _msg[9] != 0)
+        {
+            m_multiStoreError = "PROTECT CHANGED";
+            m_multiStorePhase = m_multiStorePhase == MultiStorePhase::Protect
+                ? MultiStorePhase::Protected : MultiStorePhase::Failed;
+            return;
+        }
+
+        const auto* packet = getMidiPacket(midiPacketName(MidiPacketType::MultiDump));
+        if(m_multiStorePhase == MultiStorePhase::Source)
+        {
+            if(!packet || _msg.size() != packet->size() || _msg[6] != virusLib::DUMP_MULTI
+                || _msg[7] != virusLib::toMidiByte(virusLib::BankNumber::EditBuffer) || _msg[8] != 0)
+                return;
+            pluginLib::MidiPacket::Data data;
+            pluginLib::MidiPacket::ParamValues values;
+            if(!packet->parse(data, values, getParameterDescriptions(), _msg, false))
+            {
+                m_multiStoreError = "SOURCE CHECKSUM";
+                m_multiStorePhase = MultiStorePhase::Failed;
+                return;
+            }
+            m_multiStoreDump = _msg;
+            m_multiStoreDump[7] = virusLib::toMidiByte(virusLib::BankNumber::A);
+            m_multiStoreDump[8] = static_cast<uint8_t>(m_multiStoreProgram);
+            for(size_t i = 0; i < kNameLength; ++i)
+            {
+                const auto offset = packet->getByteIndexForParameterName("MultiName" + std::to_string(i));
+                if(offset == pluginLib::MidiPacket::InvalidIndex || offset >= m_multiStoreDump.size())
+                {
+                    m_multiStoreError = "NAME OFFSET ERROR";
+                    m_multiStorePhase = MultiStorePhase::Failed;
+                    return;
+                }
+                m_multiStoreDump[offset] = static_cast<uint8_t>(m_multiStoreName[i]);
+            }
+            if(!packet->updateChecksums(m_multiStoreDump))
+            {
+                m_multiStoreError = "CHECKSUM ERROR";
+                m_multiStorePhase = MultiStorePhase::Failed;
+                return;
+            }
+            m_multiStorePhase = MultiStorePhase::Protect;
+            if(!sendSysEx(MidiPacketType::RequestGlobal))
+            {
+                m_multiStoreError = "C118 REQUEST ERROR";
+                m_multiStorePhase = MultiStorePhase::Failed;
+            }
+            return;
+        }
+        if(m_multiStorePhase == MultiStorePhase::Protect)
+        {
+            if(!protectReply)
+                return;
+            m_multiStorePhase = MultiStorePhase::Readback;
+            sendSysEx(m_multiStoreDump);
+            // Preserve write -> read ordering on the existing MIDI queue.
+            if(!requestMulti(virusLib::toMidiByte(virusLib::BankNumber::A), static_cast<uint8_t>(m_multiStoreProgram)))
+            {
+                m_multiStoreError = "READBACK REQ ERROR";
+                m_multiStorePhase = MultiStorePhase::Failed;
+            }
+            return;
+        }
+        if(m_multiStorePhase != MultiStorePhase::Readback || !packet || _msg.size() != m_multiStoreDump.size()
+            || _msg[6] != virusLib::DUMP_MULTI || _msg[7] != m_multiStoreDump[7]
+            || _msg[8] != m_multiStoreDump[8])
+            return;
+        pluginLib::MidiPacket::Data data;
+        pluginLib::MidiPacket::ParamValues values;
+        const bool valid = packet->parse(data, values, getParameterDescriptions(), _msg, false);
+        m_multiStoreError = valid ? "READBACK MISMATCH" : "READBACK CHECKSUM";
+        m_multiStorePhase = valid && _msg == m_multiStoreDump ? MultiStorePhase::Stored : MultiStorePhase::Failed;
     }
 
     synthLib::SysexBuffer Controller::modifySingleDump(const synthLib::SysexBuffer& _sysex, const virusLib::BankNumber _newBank, const uint8_t _newProgram) const
