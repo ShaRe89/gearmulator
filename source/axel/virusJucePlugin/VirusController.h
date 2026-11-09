@@ -195,6 +195,25 @@ namespace virus
 
 		// audio thread: the host tempo in units of the Clock Tempo parameter, which follows it on the message thread
 		void setHostClockTempo(int _value);
+		// A nonnegative value means the host supplied a tempo (not a MIDI Clock Rx mode flag).
+		bool hasHostTempo() const { return m_hostClockTempo.load(std::memory_order_relaxed) >= 0; }
+
+        // 138k: non-persistent MIDI performance-controller reset, not a synth reboot.
+        // Send to all 16 channels: in SINGLE only the configured global channel is used,
+        // and in MULTI parts can be assigned to any channel.
+        void panicResetControllers() const
+        {
+            for(uint8_t channel = 0; channel < 16; ++channel)
+            {
+                const auto cc = static_cast<uint8_t>(0xB0 | channel);
+                sendMidiEvent(cc, 121, 0);   // Reset All Controllers (MIDI standard)
+                sendMidiEvent(cc, 1,   0);   // Modulation wheel neutral
+                sendMidiEvent(cc, 7, 127);   // Virus Channel Volume unit value (manual p.155-156)
+                sendMidiEvent(cc, 11, 127);  // Virus Expression unit value (manual p.155-156)
+                sendMidiEvent(cc, 64,  0);   // Sustain released
+                sendMidiEvent(static_cast<uint8_t>(0xE0 | channel), 0, 64); // Pitch bend centre (8192)
+            }
+        }
 
     private:
 		void handleAsyncUpdate() override;

@@ -982,6 +982,19 @@ bool Microcontroller::sendSysex(const synthLib::SysexBuffer& _data, std::vector<
 				const auto param = _data[8];
 				const auto value = _data[9];
 
+                // 138j: ROM E45/A65 sends F4 F4 72 + [40 or active part] 00 00.
+                // This is a one-shot DSP event, not a persistent C0 parameter change.
+                // Restrict it to the editor and known mode/part address values.
+                if (!m_rom.isTIFamily() && m_rom.getModel() == DeviceModel::C
+                    && _source == MidiEventSource::Editor && page == PAGE_C
+                    && param == 0 && value == 0 && (part == SINGLE || part < getPartCount()))
+                {
+                    writeHostBitsWithWait(0, 1);
+                    TWord buf[] = {0xF4F472, static_cast<TWord>(part) << 16};
+                    m_hdi08.writeRX(buf, 2);
+                    return true;
+                }
+
 				// A catalogue SINGLE was loaded as an edit-buffer dump by the editor.
 				// Synchronize only its source position and acknowledge C102; no preset load.
 				if(!m_rom.isTIFamily() && page == PAGE_C && param == g_singleProgramParameter
@@ -1694,7 +1707,11 @@ void Microcontroller::applyToMultiEditBuffer(const Page _page, const uint8_t _pa
 		}
 		break;
 	case PAGE_C:
-		if (_param >= PART_MIDI_CHANNEL && _param <= PART_OUTPUT_SELECT)
+		if (!m_rom.isTIFamily() && m_globalSettings[PLAY_MODE] != PlayModeSingle && _param == MD_CLOCK_TEMPO)
+		{
+			m_multiEditBuffer[MD_CLOCK_TEMPO] = _value;
+		}
+		else if (_param >= PART_MIDI_CHANNEL && _param <= PART_OUTPUT_SELECT)
 		{
 			const auto idx = MD_PART_MIDI_CHANNEL + ((_param-PART_MIDI_CHANNEL)*16) + _part;
 			m_multiEditBuffer[idx] = _value;

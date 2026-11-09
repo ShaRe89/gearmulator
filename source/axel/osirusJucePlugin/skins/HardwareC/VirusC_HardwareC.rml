@@ -1601,7 +1601,7 @@ HC6_Menus = {
   -- OS6.6 MAIN, ROM 0x147D4. Field 4: group start; field 5: {parameter, min, max} visibility.
   HC6_MainEdit = {
     {"Clock Tempo", "CLOCK", "Tempo (bpm)", true, {"Play Mode", 0, 0}},
-    {"Clock Tempo", "CLOCK", "Tempo (bpm)", true, {"Play Mode", 1, 2}},
+    {"C_Undefined15", "CLOCK", "Tempo (bpm)", true, {"Play Mode", 1, 2}},
     {"Patch Volume", "COMMON", "PatchVolume", true},
     {"Panorama", "COMMON", "Panorama"},
     {"Key Mode", "COMMON", "KeyMode"},

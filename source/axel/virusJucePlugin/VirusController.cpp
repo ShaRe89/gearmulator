@@ -117,9 +117,11 @@ namespace virus
 	{
 		// The parameter must not be touched here. Whenever it differs from the host tempo, as long as the host tells
 		// one, the message thread sets it to the host tempo again
-		m_hostClockTempo.store(_value, std::memory_order_relaxed);
+		const auto previous = m_hostClockTempo.exchange(_value, std::memory_order_relaxed);
 
-		if(m_clockTempoValue.load(std::memory_order_relaxed) != _value)
+		// Also refresh C15 on the first host tempo report or a host tempo change,
+		// even if B16 already equals the supplied value.
+		if(previous != _value || m_clockTempoValue.load(std::memory_order_relaxed) != _value)
 			triggerAsyncUpdate();
 	}
 
@@ -127,11 +129,25 @@ namespace virus
 	{
 		const auto value = m_hostClockTempo.load(std::memory_order_relaxed);
 
-		if(!m_clockTempo || value < 0 || m_clockTempo->getUnnormalizedValue() == value)
+		if(!m_clockTempo || value < 0)
 			return;
 
-		m_clockTempo->setUnnormalizedValue(value, pluginLib::Parameter::Origin::HostAutomation);
-		m_clockTempoValue = m_clockTempo->getUnnormalizedValue();
+		if(m_clockTempo->getUnnormalizedValue() != value)
+		{
+			m_clockTempo->setUnnormalizedValue(value, pluginLib::Parameter::Origin::HostAutomation);
+			m_clockTempoValue = m_clockTempo->getUnnormalizedValue();
+		}
+
+		// MULTI CLOCK on Virus C is displayed via C15, while the existing
+		// host path updates B16. Mirror host tempo to the UI parameter only;
+		// setValueFromSynth does not send another MIDI parameter change.
+		if(m_processor.getModel() == virusLib::DeviceModel::C && isMultiMode())
+		{
+			for(uint8_t part = 0; part < getPartCount(); ++part)
+				for(auto* target : findSynthParam(part, virusLib::PAGE_C, 15))
+					if(target->getUnnormalizedValue() != value)
+						target->setValueFromSynth(value, pluginLib::Parameter::Origin::PresetChange);
+		}
 	}
 
     bool Controller::parseSysexMessage(const pluginLib::SysEx& _msg, synthLib::MidiEventSource _source)
@@ -662,13 +678,21 @@ namespace virus
                     }
                     else if(desc.page == virusLib::PAGE_B && desc.index == 20)
                         multiIndex = 23;
+                    else if(desc.page == virusLib::PAGE_B && desc.index == virusLib::CLOCK_TEMPO)
+                        multiIndex = 15; // OS 6.6 MAIN/CLOCK MULTI uses C15; dump exposes B16.
                     if(multiIndex >= 0)
                     {
+                        // A MULTI readback may contain an internal tempo different from
+                        // the active host tempo. Do not overwrite the displayed C15
+                        // with that stored value while the host supplies tempo.
+                        const auto hostTempo = m_hostClockTempo.load(std::memory_order_relaxed);
+                        const auto displayValue = multiIndex == 15 && hostTempo >= 0 && hostTempo <= 127
+                            ? static_cast<uint8_t>(hostTempo) : value;
                         const auto first = rawPart == pluginLib::MidiPacket::AnyPart ? 0 : part;
                         const auto end = rawPart == pluginLib::MidiPacket::AnyPart ? getPartCount() : part + 1;
                         for(auto p = first; p < end; ++p)
                             for(auto* target : findSynthParam(static_cast<uint8_t>(p), virusLib::PAGE_C, static_cast<uint8_t>(multiIndex)))
-                                target->setValueFromSynth(value, pluginLib::Parameter::Origin::PresetChange);
+                                target->setValueFromSynth(displayValue, pluginLib::Parameter::Origin::PresetChange);
                     }
                 }
 

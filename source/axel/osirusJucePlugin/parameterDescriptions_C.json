@@ -286,7 +286,7 @@
  		{"page":114, "index":12, "name":"MultiName7", "min":0, "max":127, "toText":"unsignedZero", "isPublic":false, "isDiscrete":false, "isBool":false},
  		{"page":114, "index":13, "name":"MultiName8", "min":0, "max":127, "toText":"unsignedZero", "isPublic":false, "isDiscrete":false, "isBool":false},
  		{"page":114, "index":14, "name":"MultiName9", "min":0, "max":127, "toText":"unsignedZero", "isPublic":false, "isDiscrete":false, "isBool":false},
- 		{"page":114, "index":15, "name":"C_Undefined15", "min":0, "max":127, "toText":"unsignedZero", "isPublic":false, "isDiscrete":false, "isBool":false},
+ 		{"page":114, "class":"MultiOrSingle|NonPartSensitive", "index":15, "name":"C_Undefined15", "min":0, "max":127, "toText":"bpm", "isPublic":false, "isDiscrete":false, "isBool":false},
  		{"page":114, "index":16, "name":"C_Undefined16", "min":0, "max":127, "toText":"unsignedZero", "isPublic":false, "isDiscrete":false, "isBool":false},
  		{"page":114, "index":17, "name":"C_Undefined17", "min":0, "max":127, "toText":"unsignedZero", "isPublic":false, "isDiscrete":false, "isBool":false},
  		{"page":114, "index":18, "name":"C_Undefined18", "min":0, "max":127, "toText":"unsignedZero", "isPublic":false, "isDiscrete":false, "isBool":false},

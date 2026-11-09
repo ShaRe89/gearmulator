@@ -171,6 +171,45 @@ namespace genericVirusUI
                         return 1;
                     }, 1);
                     lua_setfield(L, -2, "multiStoreStatus");
+                    lua_pushlightuserdata(L, &getController());
+                    lua_pushcclosure(L, [](lua_State* state) -> int
+                    {
+                        const auto& controller = *static_cast<virus::Controller*>(lua_touserdata(state, lua_upvalueindex(1)));
+                        lua_pushboolean(state, controller.hasHostTempo());
+                        return 1;
+                    }, 1);
+                    lua_setfield(L, -2, "hasHostTempo");
+                    // 138j: transmit only the two ROM E45 DSP words (F4F472, part/0/0).
+                    // The Microcontroller handles this exact panel action without changing C0.
+                    lua_pushlightuserdata(L, &getController());
+                    lua_pushcclosure(L, [](lua_State* state) -> int
+                    {
+                        auto& controller = *static_cast<virus::Controller*>(lua_touserdata(state, lua_upvalueindex(1)));
+                        const auto* playMode = controller.getParameter(virus::g_paramPlayMode, 0);
+                        const int mode = playMode ? playMode->getUnnormalizedValue() : -1;
+                        const auto selectedPart = controller.getCurrentPart();
+                        const bool valid = mode >= 0 && mode <= 2 && (mode == 0 || selectedPart < controller.getPartCount());
+                        const auto part = static_cast<uint8_t>(mode == 0 ? virusLib::SINGLE : selectedPart);
+                        const bool sent = valid && controller.sendParameterChange(virusLib::PARAM_CHANGE_C, part, 0, 0);
+                        lua_pushboolean(state, sent);
+                        return 1;
+                    }, 1);
+                    lua_setfield(L, -2, "panicOnce");
+                    // 138k: controller reset following a second SHIFT+TRANSPOSE click.
+                    // Unlike panicOnce, MIDI controller reset is a distinct action.
+                    lua_pushlightuserdata(L, &getController());
+                    lua_pushcclosure(L, [](lua_State* state) -> int
+                    {
+                        auto& controller = *static_cast<virus::Controller*>(lua_touserdata(state, lua_upvalueindex(1)));
+                        const auto* playMode = controller.getParameter(virus::g_paramPlayMode, 0);
+                        const int mode = playMode ? playMode->getUnnormalizedValue() : -1;
+                        const bool valid = mode >= 0 && mode <= 2;
+                        if(valid)
+                            controller.panicResetControllers();
+                        lua_pushboolean(state, valid);
+                        return 1;
+                    }, 1);
+                    lua_setfield(L, -2, "panicReset");
 				}
 				lua_pop(L, 1);
 			}
