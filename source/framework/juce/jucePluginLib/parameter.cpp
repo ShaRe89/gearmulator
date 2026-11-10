@@ -60,8 +60,12 @@ namespace pluginLib
 		if (value == m_lastValue)
 			return;
 
-		// ignore initial update
-		if (m_lastValue != NoValue)
+		// C25 has no guaranteed initial readback on Virus C. Its first explicit UI
+		// write must reach the synth, without assuming the DSP's initial EQ state.
+		const bool firstC25UiWrite = _origin == Origin::Ui && m_desc.page == 114
+			&& m_desc.index == 25 && m_desc.name == "C_Undefined25";
+		// Preserve initial-update suppression for every other parameter/origin.
+		if (m_lastValue != NoValue || firstC25UiWrite)
 		{
 			if(m_rateLimit)
 			{
