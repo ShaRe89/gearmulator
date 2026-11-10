@@ -34,6 +34,7 @@ namespace virusLib
 
 		void setBpmLedDiagnosticsEnabled(bool _enabled) { m_mc->setBpmLedDiagnosticsEnabled(_enabled); }
 		bool readBpmLedDiagnostics(BpmLedDiagnostics& _out) const { return m_mc->readBpmLedDiagnostics(_out); }
+		const auto& getAuditionOutcome() const { return m_auditionOutcome; }
 
 		void process(const synthLib::TAudioInputs& _inputs, const synthLib::TAudioOutputs& _outputs, size_t _size, const std::vector<synthLib::SMidiEvent>& _midiIn, std::vector<synthLib::SMidiEvent>& _midiOut) override;
 
@@ -83,6 +84,7 @@ namespace virusLib
 		std::unique_ptr<DspSingle> m_dsp;
 		DspSingle* m_dsp2 = nullptr;
 		std::unique_ptr<Microcontroller> m_mc;
+		std::shared_ptr<std::atomic<uint64_t>> m_auditionOutcome;
 
 		bool m_midiTimestamps = false;
 		float m_samplerate;

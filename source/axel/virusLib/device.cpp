@@ -30,6 +30,16 @@ namespace virusLib
 		createDspInstances(dsp1, m_dsp2, m_rom, m_samplerate);
 		m_dsp.reset(dsp1);
 
+		// Install before boot/JIT compilation. The observer only becomes ready
+		// after the known OS6.6 code signature has actually been executed.
+		if(m_rom.getModel() == DeviceModel::C)
+		{
+			m_auditionOutcome = std::make_shared<std::atomic<uint64_t>>(0);
+			auto config = m_dsp->getJIT().getConfig();
+			config.virusCAuditionOutcome = m_auditionOutcome;
+			m_dsp->getJIT().setConfig(config);
+		}
+
 		m_dspClockPercent = m_dsp->getEsxiClock().getSpeedPercent();
 
 		m_dsp->getAudio().setCallback([this](dsp56k::Audio*)

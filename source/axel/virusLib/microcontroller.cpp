@@ -982,15 +982,20 @@ bool Microcontroller::sendSysex(const synthLib::SysexBuffer& _data, std::vector<
 				const auto param = _data[8];
 				const auto value = _data[9];
 
-                // 138j: ROM E45/A65 sends F4 F4 72 + [40 or active part] 00 00.
-                // This is a one-shot DSP event, not a persistent C0 parameter change.
-                // Restrict it to the editor and known mode/part address values.
+                // 138j PANIC (C0=0) stays unchanged. 138l AUDITION uses
+                // editor-only C0=127/1 to reproduce the E37/E59 DSP words:
+                // F4 F4 72, [part] 01 7F / [part] 01 00 respectively.
+                // These commands are not persistent parameter changes.
+                const bool isPanicOnce = param == 0 && value == 0;
+                const bool isAudition = param == 0 && (value == 127 || value == 1);
                 if (!m_rom.isTIFamily() && m_rom.getModel() == DeviceModel::C
                     && _source == MidiEventSource::Editor && page == PAGE_C
-                    && param == 0 && value == 0 && (part == SINGLE || part < getPartCount()))
+                    && (isPanicOnce || isAudition) && (part == SINGLE || part < getPartCount()))
                 {
                     writeHostBitsWithWait(0, 1);
-                    TWord buf[] = {0xF4F472, static_cast<TWord>(part) << 16};
+                    const TWord data = (static_cast<TWord>(part) << 16)
+                        | (isAudition ? static_cast<TWord>(0x0100 | (value == 127 ? 0x7f : 0x00)) : 0);
+                    TWord buf[] = {0xF4F472, data};
                     m_hdi08.writeRX(buf, 2);
                     return true;
                 }

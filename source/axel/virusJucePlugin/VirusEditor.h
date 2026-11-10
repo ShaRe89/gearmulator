@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include "jucePluginEditorLib/firmwareSelector.h"
 #include "jucePluginEditorLib/pluginEditor.h"
 
@@ -47,7 +49,6 @@ namespace genericVirusUI
 		~VirusEditor() override;
 
 		void create() override;
-		void openMenu(Rml::Event& _event) override;
 
 		void setPart(size_t _part);
 
@@ -99,6 +100,20 @@ namespace genericVirusUI
 		juceRmlUi::ElemButton* m_playModeToggle = nullptr;
 
 		Rml::Element* m_deviceModel = nullptr;
+
+		// 138l: part address of an audition voice started by this editor (-1 = idle).
+		enum class AuditionState { Idle = 0, Held = 1, Latched = 2, Pending = 3, Unavailable = 4 };
+		AuditionState refreshAudition();
+		bool sendAudition(uint8_t _value);
+		bool startAudition();
+		bool releaseAudition();
+		bool stopAudition();
+		int m_auditionPart = -1;
+		AuditionState m_auditionState = AuditionState::Idle;
+		std::shared_ptr<std::atomic<uint64_t>> m_auditionOutcome;
+		uint64_t m_auditionSerial = 0;
+		bool m_auditionReleaseRequested = false;
+		bool m_auditionStopRequested = false;
 
 		std::unique_ptr<ArpUserPattern> m_arpUserPattern;
 

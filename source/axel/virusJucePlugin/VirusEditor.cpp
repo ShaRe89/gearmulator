@@ -9,6 +9,7 @@
 #include "SettingsGuiOsTIrus.h"
 #include "VirusProcessor.h"
 #include "VirusController.h"
+#include "virusLib/device.h"
 
 #include "jucePluginLib/filetype.h"
 #include "jucePluginLib/pluginVersion.h"
@@ -210,6 +211,41 @@ namespace genericVirusUI
                         return 1;
                     }, 1);
                     lua_setfield(L, -2, "panicReset");
+                    // 138l AUDITION: editor-only C0 sentinels. Microcontroller
+                    // maps them to the ROM E37/E59 F4F472 + part/01/7F or 01/00.
+                    // No patch/global parameter is modified.
+                    lua_pushlightuserdata(L, this);
+                    lua_pushcclosure(L, [](lua_State* state) -> int
+                    {
+                        auto& editor = *static_cast<VirusEditor*>(lua_touserdata(state, lua_upvalueindex(1)));
+                        lua_pushboolean(state, editor.startAudition());
+                        return 1;
+                    }, 1);
+                    lua_setfield(L, -2, "auditionStart");
+                    lua_pushlightuserdata(L, this);
+                    lua_pushcclosure(L, [](lua_State* state) -> int
+                    {
+                        auto& editor = *static_cast<VirusEditor*>(lua_touserdata(state, lua_upvalueindex(1)));
+                        lua_pushboolean(state, editor.stopAudition());
+                        return 1;
+                    }, 1);
+                    lua_setfield(L, -2, "auditionStop");
+                    lua_pushlightuserdata(L, this);
+                    lua_pushcclosure(L, [](lua_State* state) -> int
+                    {
+                        auto& editor = *static_cast<VirusEditor*>(lua_touserdata(state, lua_upvalueindex(1)));
+                        lua_pushboolean(state, editor.releaseAudition());
+                        return 1;
+                    }, 1);
+                    lua_setfield(L, -2, "auditionRelease");
+                    lua_pushlightuserdata(L, this);
+                    lua_pushcclosure(L, [](lua_State* state) -> int
+                    {
+                        auto& editor = *static_cast<VirusEditor*>(lua_touserdata(state, lua_upvalueindex(1)));
+                        lua_pushinteger(state, static_cast<int>(editor.refreshAudition()));
+                        return 1;
+                    }, 1);
+                    lua_setfield(L, -2, "auditionState");
 				}
 				lua_pop(L, 1);
 			}
@@ -343,8 +379,115 @@ namespace genericVirusUI
 		ControllerLinks::create(*this);
 	}
 
+	VirusEditor::AuditionState VirusEditor::refreshAudition()
+	{
+		auto* device = dynamic_cast<virusLib::Device*>(m_processor.getPlugin().getDevice());
+		const auto outcome = device ? device->getAuditionOutcome() : nullptr;
+		if(outcome != m_auditionOutcome)
+		{
+			m_auditionOutcome = outcome;
+			m_auditionPart = -1;
+			m_auditionState = AuditionState::Idle;
+			m_auditionReleaseRequested = m_auditionStopRequested = false;
+		}
+		if(!outcome)
+			return AuditionState::Unavailable;
+		const auto observed = outcome->load(std::memory_order_acquire);
+		if(!observed)
+			return AuditionState::Unavailable;
+		if(m_auditionState == AuditionState::Pending && (observed >> 2) != m_auditionSerial)
+		{
+			switch(observed & 3)
+			{
+			case 1: m_auditionState = AuditionState::Held; break;
+			case 2: m_auditionState = AuditionState::Latched; break;
+			case 3:
+				m_auditionState = AuditionState::Idle;
+				m_auditionPart = -1;
+				m_auditionReleaseRequested = m_auditionStopRequested = false;
+				break;
+			default: break;
+			}
+		}
+		// Follow-up commands are conditional on a completed native branch, never on elapsed UI time.
+		if(m_auditionStopRequested && (m_auditionState == AuditionState::Held || m_auditionState == AuditionState::Latched))
+		{
+			if(!sendAudition(m_auditionState == AuditionState::Latched ? 127 : 1))
+				m_auditionStopRequested = false;
+		}
+		else if(m_auditionReleaseRequested && m_auditionState == AuditionState::Held)
+		{
+			m_auditionReleaseRequested = false;
+			sendAudition(1);
+		}
+		return m_auditionState;
+	}
+
+	bool VirusEditor::sendAudition(const uint8_t _value)
+	{
+		if(m_auditionPart < 0 || !m_auditionOutcome)
+			return false;
+		const auto observed = m_auditionOutcome->load(std::memory_order_acquire);
+		if(!observed)
+			return false;
+		if(!getController().sendParameterChange(virusLib::PARAM_CHANGE_C,
+			static_cast<uint8_t>(m_auditionPart), 0, _value))
+			return false;
+		m_auditionSerial = observed >> 2;
+		m_auditionState = AuditionState::Pending;
+		return true;
+	}
+
+	bool VirusEditor::startAudition()
+	{
+		if(refreshAudition() != AuditionState::Idle || m_processor.getModel() != virusLib::DeviceModel::C)
+			return false;
+		auto& controller = getController();
+		const auto* modeParam = controller.getParameter(virus::g_paramPlayMode, 0);
+		const int mode = modeParam ? modeParam->getUnnormalizedValue() : -1;
+		const auto part = controller.getCurrentPart();
+		if(mode < 0 || mode > 2 || (mode != 0 && part >= controller.getPartCount()))
+			return false;
+		m_auditionPart = mode == 0 ? virusLib::SINGLE : part;
+		if(sendAudition(127))
+			return true;
+		m_auditionPart = -1;
+		return false;
+	}
+
+	bool VirusEditor::releaseAudition()
+	{
+		const auto state = refreshAudition();
+		if(state == AuditionState::Pending)
+		{
+			m_auditionReleaseRequested = true; // mouseup before START acknowledgement
+			return true;
+		}
+		return state == AuditionState::Held && sendAudition(1);
+	}
+
+	bool VirusEditor::stopAudition()
+	{
+		const auto state = refreshAudition();
+		if(state == AuditionState::Idle)
+			return true;
+		if(state != AuditionState::Held && state != AuditionState::Latched)
+			return false;
+		const bool sent = sendAudition(state == AuditionState::Latched ? 127 : 1);
+		m_auditionStopRequested = sent;
+		return sent;
+	}
+
 	VirusEditor::~VirusEditor()
 	{
+		// Avoid a latched AUDITION note when closing the editor.
+		const auto audition = refreshAudition();
+		if(m_auditionPart >= 0 && (audition == AuditionState::Held || audition == AuditionState::Latched))
+		{
+			getController().sendParameterChange(virusLib::PARAM_CHANGE_C,
+				static_cast<uint8_t>(m_auditionPart), 0, audition == AuditionState::Latched ? 127 : 1);
+			m_auditionPart = -1;
+		}
 		m_arpUserPattern.reset();
 
 		getController().onProgramChange = nullptr;
@@ -500,55 +643,6 @@ namespace genericVirusUI
 		m_deviceModel->SetInnerRML(m);
 	}
 
-	void VirusEditor::openMenu(Rml::Event& _event)
-	{
-		if(m_processor.getModel() != virusLib::DeviceModel::C ||
-			_event.GetParameter<int>("ctrl_key", 0) == 0 || _event.GetParameter<int>("shift_key", 0) == 0)
-		{
-			Editor::openMenu(_event);
-			return;
-		}
-		// Message-thread-only readout. Reacquire the device for each action, not at menu creation.
-		juceRmlUi::Menu menu;
-		menu.addEntry("BPM diagnostics: start / reset", [this]
-		{
-			if(auto* device = dynamic_cast<virusLib::Device*>(m_processor.getPlugin().getDevice()))
-			{
-				device->setBpmLedDiagnosticsEnabled(true);
-				if(m_leds)
-					m_leds->setBpmDiagnosticsEnabled(true);
-			}
-		});
-		menu.addEntry("BPM diagnostics: stop", [this]
-		{
-			if(auto* device = dynamic_cast<virusLib::Device*>(m_processor.getPlugin().getDevice()))
-				device->setBpmLedDiagnosticsEnabled(false);
-			if(m_leds)
-				m_leds->setBpmDiagnosticsEnabled(false);
-		});
-		menu.addEntry("BPM diagnostics: copy counters", [this]
-		{
-			auto* device = dynamic_cast<virusLib::Device*>(m_processor.getPlugin().getDevice());
-			virusLib::BpmLedDiagnostics d;
-			if(!device || !device->readBpmLedDiagnostics(d))
-			{
-				juce::SystemClipboard::copyTextToClipboard("BPM diagnostics: unavailable (local Virus C required), or snapshot busy; retry.");
-				return;
-			}
-			static constexpr const char* names[] = {
-				"f5_messages", "completed_f5_messages", "received_on_edges", "received_off_edges", "process_samples",
-				"last_interval_transitions", "max_interval_transitions", "multiple_transition_intervals",
-				"covered_on_pulses", "sampled_on_edges", "sampled_off_edges"
-			};
-			static_assert(sizeof(names) / sizeof(names[0]) == virusLib::BpmLedDiagnostics::Count);
-			std::string report = std::string("Virus C BPM diagnostics\nenabled=") + (d.enabled ? "1\n" : "0\n");
-			for(size_t i = 0; i < d.counters.size(); ++i)
-				report += std::string(names[i]) + "=" + std::to_string(d.counters[i]) + "\n";
-			report += m_leds ? m_leds->getBpmDiagnosticsReport() : "gui_diagnostics=unavailable_no_LED_listener\n";
-			juce::SystemClipboard::copyTextToClipboard(juce::String(report));
-		});
-		menu.runModal(_event);
-	}
 
 	void VirusEditor::savePreset(const Rml::Event& _event)
 	{
