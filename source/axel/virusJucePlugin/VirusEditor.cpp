@@ -180,6 +180,40 @@ namespace genericVirusUI
                         return 1;
                     }, 1);
                     lua_setfield(L, -2, "hasHostTempo");
+                    // 138s1 BEGIN: isolated SINGLE dump request using the existing MIDI routing.
+                    lua_pushlightuserdata(L, this);
+                    lua_pushcclosure(L, [](lua_State* state) -> int
+                    {
+                        auto& editor = *static_cast<VirusEditor*>(lua_touserdata(state, lua_upvalueindex(1)));
+                        auto& controller = editor.getController();
+                        const auto* mode = controller.getParameter(virus::g_paramPlayMode, 0);
+                        const auto& routing = editor.m_processor.getMidiRoutingMatrix();
+                        const auto playMode = mode ? mode->getUnnormalizedValue() : -1;
+                        const auto part = controller.getCurrentPart();
+                        const char* result = "Requires Virus C SINGLE or MULTI SINGLE";
+                        if (editor.m_processor.getModel() == virusLib::DeviceModel::C
+                            && (playMode == virusLib::PlayModeSingle
+                                || (playMode == virusLib::PlayModeMultiSingle && part < 16)))
+                        {
+                            using Source = synthLib::MidiEventSource;
+                            using Type = synthLib::MidiRoutingMatrix::EventType;
+                            if (!routing.enabled(Source::Editor, Source::Device, Type::SysEx)
+                                || !routing.enabled(Source::Device, Source::Host, Type::SysEx))
+                                result = "Enable Editor-Device and Device-Host SysEx";
+                            else
+                            {
+                                // 138s8: 0x40 is the separate SINGLE buffer; 0..15 address part buffers.
+                                const auto program = playMode == virusLib::PlayModeSingle ? virusLib::SINGLE : part;
+                                const bool requested = controller.requestSingle(
+                                    virusLib::toMidiByte(virusLib::BankNumber::EditBuffer), program);
+                                result = requested ? "SINGLE dump requested" : "Request failed";
+                            }
+                        }
+                        lua_pushstring(state, result);
+                        return 1;
+                    }, 1);
+                    lua_setfield(L, -2, "requestSingleDump138s1");
+                    // 138s1 END
                     // 138j: transmit only the two ROM E45 DSP words (F4F472, part/0/0).
                     // The Microcontroller handles this exact panel action without changing C0.
                     lua_pushlightuserdata(L, &getController());
