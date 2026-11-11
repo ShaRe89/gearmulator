@@ -563,7 +563,9 @@ bool Microcontroller::send(const Page _page, const uint8_t _part, const uint8_t 
 	// parameters as well. These are addressed by part and are not single global values: deduplicating them
 	// against m_globalSettings drops a write for one part just because another part already holds that value,
 	// and would also report them back as globals of part 0.
-	const auto isGlobalSetting = _page == globalSettingsPage() && !(_page == PAGE_C && isMultiPartParameter(_param));
+	const auto isPartPan = _param == PART_PAN && m_rom.getModel() == DeviceModel::C;
+	const auto isGlobalSetting = _page == globalSettingsPage()
+		&& !(_page == PAGE_C && (isMultiPartParameter(_param) || isPartPan));
 
 	if(isGlobalSetting)
 	{
@@ -981,6 +983,9 @@ bool Microcontroller::sendSysex(const synthLib::SysexBuffer& _data, std::vector<
 				auto part = _data[7];
 				const auto param = _data[8];
 				const auto value = _data[9];
+
+				if (page == PAGE_C && param == PART_PAN && m_rom.getModel() == DeviceModel::C && part >= 16)
+					return false;
 
                 // 138j PANIC (C0=0) stays unchanged. 138l AUDITION uses
                 // editor-only C0=127/1 to reproduce the E37/E59 DSP words:
@@ -1725,6 +1730,11 @@ void Microcontroller::applyToMultiEditBuffer(const Page _page, const uint8_t _pa
 		{
 			if (_part < 16)
 				m_multiEditBuffer[MD_PART_EFFECT_SEND + _part] = _value;
+		}
+		else if (_param == PART_PAN && m_rom.getModel() == DeviceModel::C)
+		{
+			if (_part < 16)
+				m_multiEditBuffer[MD_PART_PAN + _part] = _value;
 		}
 		else
 		{
