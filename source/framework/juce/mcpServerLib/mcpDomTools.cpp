@@ -7,6 +7,7 @@
 #include "juceRmlUi/rmlInterfaces.h"
 
 #include "RmlUi/Core/Element.h"
+#include "RmlUi/Core/ComputedValues.h"
 #include "RmlUi/Core/ElementDocument.h"
 #include "RmlUi/Core/Context.h"
 #include "RmlUi/Core/Input.h"
@@ -374,6 +375,7 @@ namespace mcpServer
 
 					// Visibility
 					result.set("visible", mcpServer::JsonValue::fromBool(elem->IsVisible()));
+					result.set("computedOpacity", mcpServer::JsonValue::fromDouble(elem->GetComputedValues().opacity()));
 
 					// Inner text (truncated)
 					const auto innerRml = elem->GetInnerRML();
