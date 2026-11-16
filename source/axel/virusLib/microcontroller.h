@@ -9,6 +9,7 @@
 #include <atomic>
 #include <mutex>
 #include <limits>
+#include <optional>
 
 #include "hdi08List.h"
 #include "hdi08MidiQueue.h"
@@ -73,6 +74,12 @@ public:
 	uint32_t getPartCount() const;
 	using Part1DirtyStatus = Part1DirtyState::Status;
 	Part1DirtyStatus getPart1DirtyStatus() const;
+	// Reconstructed OS6.6 status-bit-0 state for all 16 MULTI part buffers.
+	// Unknown is intentionally distinct from Clean on host-state restoration.
+	enum class MultiPartEditedStatus : uint8_t { Clean, Dirty, Unknown };
+	MultiPartEditedStatus getMultiPartEditedStatus() const;
+	std::optional<uint64_t> getMultiPartEditedRevision(uint8_t _part) const;
+	bool acknowledgeStoredMultiPartSingle(uint8_t _part, uint64_t _expectedRevision);
 
 
 	void setSamplerate(float _samplerate);
@@ -134,6 +141,9 @@ private:
 	// Multi mode
 	std::array<TPreset,16> m_singleEditBuffers{};
 	Part1DirtyState m_part1DirtyState;
+	std::array<MultiPartEditedStatus, 16> m_multiPartEdited{};
+	// Prevent a late STORE readback from clearing edits made while STORE was pending.
+	std::array<uint64_t, 16> m_multiPartEditedRevision{};
 
 	// Single mode
 	TPreset m_singleEditBuffer{};

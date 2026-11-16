@@ -106,6 +106,10 @@ namespace virus
                 m_singleStorePhase = SingleStorePhase::Failed;
                 m_multiStoreError = "FIRMWARE CHANGED";
                 m_multiStorePhase = MultiStorePhase::Failed;
+                {
+                    const std::lock_guard lock(m_storedSingleAckMutex);
+                    m_pendingStoredSingleAckCount = 0;
+                }
 				requestRomBanks();
 			};
 		}
@@ -127,6 +131,20 @@ namespace virus
 
 	void Controller::handleAsyncUpdate()
 	{
+		// Drain STORE acknowledgements before the host-tempo early return.
+		// Device access belongs here, not inside receiveSingleStore().
+		std::array<StoredSingleAck, 32> acknowledged{};
+		size_t acknowledgedCount = 0;
+		{
+			const std::lock_guard lock(m_storedSingleAckMutex);
+			acknowledgedCount = m_pendingStoredSingleAckCount;
+			for(size_t i=0; i<acknowledgedCount; ++i)
+				acknowledged[i] = m_pendingStoredSingleAcks[i];
+			m_pendingStoredSingleAckCount = 0;
+		}
+		for(size_t i=0; i<acknowledgedCount; ++i)
+			m_processor.acknowledgeStoredMultiPartSingle(acknowledged[i].part, acknowledged[i].revision);
+
 		const auto value = m_hostClockTempo.load(std::memory_order_relaxed);
 
 		if(!m_clockTempo || value < 0)
@@ -996,6 +1014,10 @@ namespace virus
         if(!packet->updateChecksums(dump))
             return reject("CHECKSUM ERROR");
 
+        // Remember the exact part revision captured by this transaction.
+        // A later parameter edit must not be erased by the STORE readback.
+        m_singleStoreEditedRevision = expectedMode == 1
+            ? m_processor.getMultiPartEditedRevision(static_cast<uint8_t>(sourcePart)) : std::nullopt;
         m_singleStoreDump = std::move(dump);
         m_singleStoreMode = expectedMode;
         m_singleStorePart = sourcePart;
@@ -1091,7 +1113,26 @@ namespace virus
         const bool valid = packet && packet->parse(data, values, getParameterDescriptions(), _msg, false);
         m_singleStoreError = valid ? "READBACK MISMATCH" : "READBACK CHECKSUM";
         // Covers destination, all ten raw name bytes and the entire sound, not just a name match.
-        m_singleStorePhase = valid && _msg == m_singleStoreDump ? SingleStorePhase::Stored : SingleStorePhase::Failed;
+        const bool stored = valid && _msg == m_singleStoreDump;
+        m_singleStorePhase = stored ? SingleStorePhase::Stored : SingleStorePhase::Failed;
+        // ROM 4771->2132->2167: clear the source Part only for a successful
+        // MULTI-SINGLE A/B STORE, never on failure, and never if edited again.
+        if(stored && m_singleStoreMode == 1 && m_singleStoreEditedRevision)
+        {
+            bool enqueued = false;
+            {
+                const std::lock_guard lock(m_storedSingleAckMutex);
+                if(m_pendingStoredSingleAckCount < m_pendingStoredSingleAcks.size())
+                {
+                    m_pendingStoredSingleAcks[m_pendingStoredSingleAckCount++] =
+                        {static_cast<uint8_t>(m_singleStorePart), *m_singleStoreEditedRevision};
+                    enqueued = true;
+                }
+            }
+            // A full queue conservatively leaves Edited set rather than falsely clearing it.
+            if(enqueued)
+                triggerAsyncUpdate();
+        }
     }
 
     bool Controller::multiStoreContextValid() const

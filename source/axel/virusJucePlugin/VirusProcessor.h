@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 
 #include "synthLib/plugin.h"
 #include "virusLib/device.h"
@@ -21,6 +22,9 @@ namespace virus
 
 	    void processBpm(float _bpm) override;
 		const char* getPart1DirtyStatus() override;
+		const char* getMultiPartEditedStatus();
+		std::optional<uint64_t> getMultiPartEditedRevision(uint8_t _part);
+		bool acknowledgeStoredMultiPartSingle(uint8_t _part, uint64_t _expectedRevision);
 
 		// _____________
 		//

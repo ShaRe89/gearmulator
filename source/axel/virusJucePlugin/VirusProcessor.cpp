@@ -56,6 +56,48 @@ namespace virus
 		return status;
 	}
 
+	const char* VirusProcessor::getMultiPartEditedStatus()
+	{
+		const char* status = "Unknown";
+		getPlugin().readDevice([&](const synthLib::Device* _device)
+		{
+			const auto* device = dynamic_cast<const virusLib::Device*>(_device);
+			if(!device || !device->isValid())
+				return;
+			switch(device->getMultiPartEditedStatus())
+			{
+			case virusLib::Microcontroller::MultiPartEditedStatus::Clean: status = "Clean"; break;
+			case virusLib::Microcontroller::MultiPartEditedStatus::Dirty: status = "Dirty"; break;
+			case virusLib::Microcontroller::MultiPartEditedStatus::Unknown: break;
+			}
+		});
+		return status;
+	}
+
+	std::optional<uint64_t> VirusProcessor::getMultiPartEditedRevision(const uint8_t _part)
+	{
+		std::optional<uint64_t> result;
+		getPlugin().readDevice([&](const synthLib::Device* _device)
+		{
+			const auto* device = dynamic_cast<const virusLib::Device*>(_device);
+			if(device && device->isValid())
+				result = device->getMultiPartEditedRevision(_part);
+		});
+		return result;
+	}
+
+	bool VirusProcessor::acknowledgeStoredMultiPartSingle(const uint8_t _part, const uint64_t _expectedRevision)
+	{
+		bool acknowledged = false;
+		getPlugin().readDevice([&](const synthLib::Device* _device)
+		{
+			const auto* device = dynamic_cast<const virusLib::Device*>(_device);
+			if(device && device->isValid())
+				acknowledged = device->acknowledgeStoredMultiPartSingle(_part, _expectedRevision);
+		});
+		return acknowledged;
+	}
+
 	void VirusProcessor::postConstruct(std::function<std::vector<virusLib::ROMFile>()> _findRoms)
 	{
 		m_findRoms = std::move(_findRoms);

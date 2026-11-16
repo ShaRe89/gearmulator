@@ -1,6 +1,8 @@
 #pragma once
 
 #include <atomic>
+#include <array>
+#include <mutex>
 #include <optional>
 
 #include "jucePluginLib/parameterdescriptions.h"
@@ -225,6 +227,13 @@ namespace virus
         uint32_t m_singleStoreToken = 0;
         int m_singleStoreMode = 0;
         int m_singleStorePart = 0;
+        std::optional<uint64_t> m_singleStoreEditedRevision;
+        // Successful readbacks enqueue a bounded ACK for the message thread.
+        // MCU/Device access must not be nested in a SysEx callback.
+        struct StoredSingleAck { uint8_t part = 0; uint64_t revision = 0; };
+        std::mutex m_storedSingleAckMutex;
+        std::array<StoredSingleAck, 32> m_pendingStoredSingleAcks{};
+        size_t m_pendingStoredSingleAckCount = 0;
         double m_singleStoreStarted = 0;
         const char* m_singleStoreError = "STORE REJECTED";
         synthLib::SysexBuffer m_singleStoreDump;

@@ -39,6 +39,19 @@ namespace virusLib
 		{
 			return m_mc ? m_mc->getPart1DirtyStatus() : Microcontroller::Part1DirtyStatus::Unknown;
 		}
+		Microcontroller::MultiPartEditedStatus getMultiPartEditedStatus() const
+		{
+			return m_mc ? m_mc->getMultiPartEditedStatus() : Microcontroller::MultiPartEditedStatus::Unknown;
+		}
+		std::optional<uint64_t> getMultiPartEditedRevision(uint8_t _part) const
+		{
+			return m_mc ? m_mc->getMultiPartEditedRevision(_part) : std::nullopt;
+		}
+		// This mutates only the MC's separately locked, reconstructed status cache.
+		bool acknowledgeStoredMultiPartSingle(uint8_t _part, uint64_t _expectedRevision) const
+		{
+			return m_mc && m_mc->acknowledgeStoredMultiPartSingle(_part, _expectedRevision);
+		}
 
 		void process(const synthLib::TAudioInputs& _inputs, const synthLib::TAudioOutputs& _outputs, size_t _size, const std::vector<synthLib::SMidiEvent>& _midiIn, std::vector<synthLib::SMidiEvent>& _midiOut) override;
 

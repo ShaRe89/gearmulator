@@ -651,7 +651,14 @@ bool Microcontroller::processMIDI(const SMidiEvent& _ev, FrontpanelState* _fpSta
 			return true;
 		default:
 			if(g_pageA.find(_ev.b) != g_pageA.end())
-				applyToSingleEditBuffer(PAGE_A, singleMode ? SINGLE : channel, _ev.b, _ev.c);
+			{
+				if(singleMode)
+					applyToSingleEditBuffer(PAGE_A, SINGLE, _ev.b, _ev.c);
+				else
+					for(uint32_t p=0; p<getPartCount(); ++p)
+						if(channel == getPartMidiChannel(static_cast<uint8_t>(p)))
+							applyToSingleEditBuffer(PAGE_A, static_cast<uint8_t>(p), _ev.b, _ev.c);
+			}
 			break;
 		}
 		break;
@@ -660,7 +667,12 @@ bool Microcontroller::processMIDI(const SMidiEvent& _ev, FrontpanelState* _fpSta
 		{
 			if(g_pageB.find(_ev.b) != g_pageB.end())
 			{
-				applyToSingleEditBuffer(PAGE_B, singleMode ? SINGLE : channel, _ev.b, _ev.c);
+				if(singleMode)
+					applyToSingleEditBuffer(PAGE_B, SINGLE, _ev.b, _ev.c);
+				else
+					for(uint32_t p=0; p<getPartCount(); ++p)
+						if(channel == getPartMidiChannel(static_cast<uint8_t>(p)))
+							applyToSingleEditBuffer(PAGE_B, static_cast<uint8_t>(p), _ev.b, _ev.c);
 				auto e = _ev;
 				e.source = MidiEventSource::Device;
 				m_midiOutput.push_back(e);
@@ -898,7 +910,15 @@ bool Microcontroller::sendSysex(const synthLib::SysexBuffer& _data, std::vector<
 				{
 					std::copy_n(_data.data() + g_sysexPresetHeaderSize, std::min(preset.size(), _data.size() - g_sysexPresetHeaderSize - g_sysexPresetFooterSize), preset.begin());
 				}
-				return writeSingle(bank, program, preset);
+				const bool accepted = writeSingle(bank, program, preset);
+				// A fresh edit-buffer dump is a load. Internal state restore is
+				// not proof that its historical edited bit was preserved.
+				if(accepted && bank == BankNumber::EditBuffer && program < m_multiPartEdited.size() && !m_loadingState)
+				{
+					m_multiPartEdited[program] = MultiPartEditedStatus::Clean;
+					++m_multiPartEditedRevision[program];
+				}
+				return accepted;
 			}
 		case DUMP_MULTI:
 			{
@@ -1319,7 +1339,34 @@ bool Microcontroller::partProgramChange(const uint8_t _part, const uint8_t _valu
 		m_multiEditBuffer[MD_PART_PROGRAM_NUMBER + _part] = _value;
 		const auto referenceLoad = _part == 0 && !m_loadingState && m_rom.getModel() == DeviceModel::C
 			? m_part1DirtyState.beginLoad() : 0;
-		return writeSingle(BankNumber::EditBuffer, _part, single, referenceLoad);
+		const bool accepted = writeSingle(BankNumber::EditBuffer, _part, single, referenceLoad);
+		if(accepted && _part < m_multiPartEdited.size() && !m_loadingState)
+		{
+			// ROM 6.6: 23F4..2473. RAM A-D clears the Part's status
+			// byte; ROM banks E-H preserve the preset's bit 0 unless the
+			// header differs from the requested bank/program, which sets it.
+			// Only use this rule for the verified firmware signature.
+			const auto& rom = m_rom.getRomFileData();
+			const bool os66BankStatus = rom.size() > 0x80df
+				&& rom[0x23f4] == 0xed && rom[0x23f5] == 0xb4 && rom[0x23f6] == 0x02
+				&& rom[0x23fc] == 0xb5 && rom[0x23fd] == 0x6e
+				&& rom[0x2413] == 0xe9 && rom[0x243b] == 0xd2
+				&& rom[0x5e2d] == 0x75 && rom[0x5e2e] == 0x6e && rom[0x5e2f] == 0x04
+				&& (rom[0x80df] & 0x80) != 0;
+			const auto bankIndex = toArrayIndex(bank);
+			if(os66BankStatus && bankIndex < 4)
+				m_multiPartEdited[_part] = MultiPartEditedStatus::Clean;
+			else if(os66BankStatus && bankIndex < 8)
+			{
+				const bool changedHeader = single[2] != bankIndex || single[3] != _value;
+				m_multiPartEdited[_part] = changedHeader || (single[1] & 1) != 0
+					? MultiPartEditedStatus::Dirty : MultiPartEditedStatus::Clean;
+			}
+			else
+				m_multiPartEdited[_part] = MultiPartEditedStatus::Unknown;
+			++m_multiPartEditedRevision[_part];
+		}
+		return accepted;
 	}
 
 	return true;
@@ -1446,6 +1493,11 @@ bool Microcontroller::setState(const std::vector<synthLib::SMidiEvent>& _events)
 
 	// delay all preset loads until everything is loaded
 	m_part1DirtyState.invalidate();
+	// State serialization contains edit buffers, but not the ROM MCU's
+	// complete status-byte lifecycle. Do not silently interpret this as Clean.
+	m_multiPartEdited.fill(MultiPartEditedStatus::Unknown);
+	for(auto& revision : m_multiPartEditedRevision)
+		++revision;
 	m_loadingState = true;
 
 	std::vector<SMidiEvent> unusedResponses;
@@ -1673,7 +1725,51 @@ void Microcontroller::applyToSingleEditBuffer(const Page _page, const uint8_t _p
 {
 	auto& single = _part == SINGLE ? m_singleEditBuffer : m_singleEditBuffers[_part];
 
+	// Only these direct ROM table paths reach the general Part status-bit setter
+	// (PAGE A: F597; PAGE B: F618; common handler: 126D..12AA).
+	const auto triggersEdited = [&]() -> bool
+	{
+		if(_page == PAGE_A)
+		{
+			switch(_param)
+			{
+			case 0: case 1: case 2: case 3: case 4:
+			case 6: case 7: case 8: case 9:
+			case 11: case 12: case 13: case 14: case 15: case 16:
+			case 32: case 64: case 65: case 66:
+			case 120: case 121: case 122: case 123:
+			case 124: case 125: case 126: case 127:
+				return false;
+			default: return true;
+			}
+		}
+		if(_page != PAGE_B || _param == 122)
+			return false;
+		// B112..B121: ROM handler 1242 returns early below 0x20.
+		return !(_param >= 112 && _param <= 121 && _value < 0x20);
+	};
+	// Every actual buffer mutation advances the revision, even when this ROM
+	// handler does not set Edited. This protects asynchronous SINGLE-STORE.
+	size_t offset = single.size();
+	switch(_page)
+	{
+	case PAGE_A: if(_param != 0) offset = _param; break;
+	case PAGE_B: offset = size_t{128} + _param; break;
+	case PAGE_6E: offset = size_t{256} + _param; break;
+	case PAGE_6F: offset = size_t{384} + _param; break;
+	default: break;
+	}
+	const bool changed = m_rom.getModel() == DeviceModel::C
+		&& _part < m_multiPartEdited.size() && offset < single.size()
+		&& single[offset] != _value;
+	const bool edited = changed && triggersEdited();
 	applyToSingleEditBuffer(single, _page, _param, _value);
+	if(changed && !m_loadingState)
+	{
+		++m_multiPartEditedRevision[_part];
+		if(edited)
+			m_multiPartEdited[_part] = MultiPartEditedStatus::Dirty;
+	}
 
 	// The TI takes Arp Mode as parameter 15 of page B, but keeps it in the patch where the A, B and C have it, at
 	// parameter 1, and loads it from there. Without the copy, a changed Arp Mode was gone once the patch was loaded again
@@ -1850,6 +1946,9 @@ void Microcontroller::receiveUpgradedPreset()
 	else if(m_sentPresetProgram == SINGLE || m_sentPresetProgram < m_singleEditBuffers.size())
 	{
 		auto& single = m_sentPresetProgram == SINGLE ? m_singleEditBuffer : m_singleEditBuffers[m_sentPresetProgram];
+		// A DSP echo can replace a part after STORE captured its revision.
+		// Remember actual buffer bytes so a delayed STORE ACK cannot erase that change.
+		const auto beforeUpgrade = single;
 
 		// The firmware got the arpeggiator switched off, see sendPreset(). The TI copies page B 1 to 15 when it upgrades
 		const auto arpMode = single[128 + g_arpMode];
@@ -1862,9 +1961,47 @@ void Microcontroller::receiveUpgradedPreset()
 			if(m_rom.isTIFamily())
 				single[128 + g_arpModeParamTI] = arpMode;
 		}
+		if(m_rom.getModel() == DeviceModel::C && m_sentPresetProgram < m_multiPartEditedRevision.size()
+			&& !m_loadingState && single != beforeUpgrade)
+			++m_multiPartEditedRevision[m_sentPresetProgram];
 		if (m_sentPresetProgram == 0 && m_rom.getModel() == DeviceModel::C)
 			m_part1DirtyState.completeLoad(m_sentPart1ReferenceLoad, single.data(), upgradedPreset.size());
 	}
+}
+
+Microcontroller::MultiPartEditedStatus Microcontroller::getMultiPartEditedStatus() const
+{
+	std::lock_guard lock(m_mutex);
+	if(m_rom.getModel() != DeviceModel::C || m_loadingState
+		|| presetWriteInProgress() || !m_pendingInput.empty())
+		return MultiPartEditedStatus::Unknown;
+	bool unknown = false;
+	for(const auto state : m_multiPartEdited)
+	{
+		if(state == MultiPartEditedStatus::Dirty)
+			return MultiPartEditedStatus::Dirty;
+		unknown |= state == MultiPartEditedStatus::Unknown;
+	}
+	return unknown ? MultiPartEditedStatus::Unknown : MultiPartEditedStatus::Clean;
+}
+
+std::optional<uint64_t> Microcontroller::getMultiPartEditedRevision(const uint8_t _part) const
+{
+	std::lock_guard lock(m_mutex);
+	if(m_rom.getModel() != DeviceModel::C || _part >= m_multiPartEditedRevision.size() || m_loadingState)
+		return std::nullopt;
+	return m_multiPartEditedRevision[_part];
+}
+
+bool Microcontroller::acknowledgeStoredMultiPartSingle(const uint8_t _part, const uint64_t _expectedRevision)
+{
+	std::lock_guard lock(m_mutex);
+	if(m_rom.getModel() != DeviceModel::C || m_loadingState || _part >= m_multiPartEditedRevision.size()
+		|| m_multiPartEditedRevision[_part] != _expectedRevision)
+		return false;
+	m_multiPartEdited[_part] = MultiPartEditedStatus::Clean;
+	++m_multiPartEditedRevision[_part];
+	return true;
 }
 
 Microcontroller::Part1DirtyStatus Microcontroller::getPart1DirtyStatus() const
