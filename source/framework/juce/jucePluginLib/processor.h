@@ -155,6 +155,7 @@ namespace pluginLib
 		uint32_t getDspClockPercent() const;
 		uint64_t getDspClockHz() const;
 		bool canModifyDspClock() const;
+		virtual const char* getPart1DirtyStatus() { return "Unknown"; }
 
 		bool setPreferredDeviceSamplerate(float _samplerate);
 		float getPreferredDeviceSamplerate() const;

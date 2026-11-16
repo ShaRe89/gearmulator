@@ -274,12 +274,14 @@ namespace virusLib
 	{
 		if(_data == 0xf4f4f4)
 		{
+			m_noUpgrade.acknowledge(waitingForPreset());
 			m_remainingPresetBytes = 0;
 			LOG("DSP TX [Preset] No upgrade needed (F4F4F4)");
 			return false;
 		}
 
 		LOG("DSP TX [Preset] Begin receiving upgraded preset (F400F4)");
+		m_noUpgrade.upgraded();
 
 		m_presetData.clear();
 
@@ -412,8 +414,9 @@ namespace virusLib
 		return true;
 	}
 
-	void Hdi08TxParser::waitForPreset(uint32_t _byteCount)
+	void Hdi08TxParser::waitForPreset(uint32_t _byteCount, uint64_t _part1ReferenceLoad)
 	{
+		m_noUpgrade.arm(_part1ReferenceLoad);
 		m_remainingPresetBytes = _byteCount;
 	}
 

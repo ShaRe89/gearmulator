@@ -38,6 +38,24 @@ namespace virus
 		static_cast<Controller&>(getController()).setHostClockTempo(bpmValue);
 	}
 
+	const char* VirusProcessor::getPart1DirtyStatus()
+	{
+		const char* status = "Unknown";
+		getPlugin().readDevice([&](const synthLib::Device* _device)
+		{
+			const auto* device = dynamic_cast<const virusLib::Device*>(_device);
+			if (!device || !device->isValid())
+				return;
+			switch (device->getPart1DirtyStatus())
+			{
+			case virusLib::Microcontroller::Part1DirtyStatus::Clean: status = "Clean"; break;
+			case virusLib::Microcontroller::Part1DirtyStatus::Dirty: status = "Dirty"; break;
+			case virusLib::Microcontroller::Part1DirtyStatus::Unknown: break;
+			}
+		});
+		return status;
+	}
+
 	void VirusProcessor::postConstruct(std::function<std::vector<virusLib::ROMFile>()> _findRoms)
 	{
 		m_findRoms = std::move(_findRoms);

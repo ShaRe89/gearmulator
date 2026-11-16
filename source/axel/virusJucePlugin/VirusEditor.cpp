@@ -172,6 +172,15 @@ namespace genericVirusUI
                         return 1;
                     }, 1);
                     lua_setfield(L, -2, "multiStoreStatus");
+                    // Read the existing backend status; do not alter the dirty reference.
+                    lua_pushlightuserdata(L, &m_processor);
+                    lua_pushcclosure(L, [](lua_State* state) -> int
+                    {
+                        auto& processor = *static_cast<virus::VirusProcessor*>(lua_touserdata(state, lua_upvalueindex(1)));
+                        lua_pushstring(state, processor.getPart1DirtyStatus());
+                        return 1;
+                    }, 1);
+                    lua_setfield(L, -2, "getPart1DirtyStatus");
                     lua_pushlightuserdata(L, &getController());
                     lua_pushcclosure(L, [](lua_State* state) -> int
                     {

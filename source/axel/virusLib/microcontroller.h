@@ -14,6 +14,7 @@
 #include "hdi08MidiQueue.h"
 #include "hdi08TxParser.h"
 #include "microcontrollerTypes.h"
+#include "part1DirtyState.h"
 
 namespace virusLib
 {
@@ -70,6 +71,8 @@ public:
 	const ROMFile& getROM() const { return m_rom; }
 
 	uint32_t getPartCount() const;
+	using Part1DirtyStatus = Part1DirtyState::Status;
+	Part1DirtyStatus getPart1DirtyStatus() const;
 
 
 	void setSamplerate(float _samplerate);
@@ -90,7 +93,8 @@ private:
 	uint8_t firmwareArpMode(Page _page, uint8_t _param, uint8_t _value) const;
 	bool send(Page page, uint8_t part, uint8_t param, uint8_t value);
 	void sendControlCommand(ControlCommand command, uint8_t value);
-	bool sendPreset(uint8_t program, const TPreset& _data, bool isMulti = false);
+	bool sendPreset(uint8_t program, const TPreset& _data, bool isMulti = false, uint64_t _part1ReferenceLoad = 0);
+	bool writeSingle(BankNumber _bank, uint8_t _program, const TPreset& _data, uint64_t _part1ReferenceLoad);
 	void writeHostBitsWithWait(uint8_t flag0, uint8_t flag1);
 	std::vector<dsp56k::TWord> presetToDSPWords(const TPreset& _preset, bool _isMulti) const;
 	bool getSingle(BankNumber _bank, uint32_t _preset, TPreset& _result) const;
@@ -129,6 +133,7 @@ private:
 
 	// Multi mode
 	std::array<TPreset,16> m_singleEditBuffers{};
+	Part1DirtyState m_part1DirtyState;
 
 	// Single mode
 	TPreset m_singleEditBuffer{};
@@ -137,6 +142,7 @@ private:
 
 	uint8_t m_sentPresetProgram = 0xff;
 	bool m_sentPresetIsMulti = false;
+	uint64_t m_sentPart1ReferenceLoad = 0;
 
 	// Device does not like if we send everything at once, therefore we delay the send of Singles after sending a Multi
 	struct SPendingPresetWrite
@@ -144,6 +150,7 @@ private:
 		uint8_t program = 0;
 		bool isMulti = false;
 		TPreset data;
+		uint64_t part1ReferenceLoad = 0;
 	};
 
 	std::list<SPendingPresetWrite> m_pendingPresetWrites;

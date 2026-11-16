@@ -58,6 +58,12 @@ namespace synthLib
 
 		void setDevice(Device* _device);
 		Device* getDevice() const { return m_device; }
+		// The callback must not retain the pointer. setDevice() uses the same lock.
+		void readDevice(const std::function<void(const Device*)>& _read) const
+		{
+			std::lock_guard lock(m_lock);
+			_read(m_device);
+		}
 
 		// The device's clock is set with the processing lock held, so that it never changes in the middle of process()
 		bool setDspClockPercent(uint32_t _percent);

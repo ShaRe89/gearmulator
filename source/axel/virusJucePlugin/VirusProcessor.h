@@ -20,6 +20,7 @@ namespace virus
 	    ~VirusProcessor() override;
 
 	    void processBpm(float _bpm) override;
+		const char* getPart1DirtyStatus() override;
 
 		// _____________
 		//

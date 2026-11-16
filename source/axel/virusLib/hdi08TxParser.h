@@ -2,6 +2,7 @@
 
 #include "synthLib/midiTypes.h"
 #include "dsp56kEmu/types.h"
+#include "presetNoUpgrade.h"
 
 #include <array>
 #include <cstddef>
@@ -54,7 +55,8 @@ namespace virusLib
 		void setBpmLedDiagnosticsEnabled(bool _enabled);
 		void sampleBpmLedDiagnostics();
 		const BpmLedDiagnostics& getBpmLedDiagnostics() const { return m_bpmDiagnostics; }
-		void waitForPreset(uint32_t _byteCount);
+		void waitForPreset(uint32_t _byteCount, uint64_t _part1ReferenceLoad = 0);
+		uint64_t takeNoUpgradeLoad() { return m_noUpgrade.take(); }
 
 		bool waitingForPreset() const
 		{
@@ -88,6 +90,7 @@ namespace virusLib
 		uint32_t m_midiCount = 0;
 
 		uint32_t m_remainingPresetBytes = 0;
+		PresetNoUpgrade m_noUpgrade;
 		uint32_t m_remainingStatusBytes = 0;
 
 		std::array<uint8_t, 4> m_usbPacket{};

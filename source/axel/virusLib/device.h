@@ -35,6 +35,10 @@ namespace virusLib
 		void setBpmLedDiagnosticsEnabled(bool _enabled) { m_mc->setBpmLedDiagnosticsEnabled(_enabled); }
 		bool readBpmLedDiagnostics(BpmLedDiagnostics& _out) const { return m_mc->readBpmLedDiagnostics(_out); }
 		const auto& getAuditionOutcome() const { return m_auditionOutcome; }
+		Microcontroller::Part1DirtyStatus getPart1DirtyStatus() const
+		{
+			return m_mc ? m_mc->getPart1DirtyStatus() : Microcontroller::Part1DirtyStatus::Unknown;
+		}
 
 		void process(const synthLib::TAudioInputs& _inputs, const synthLib::TAudioOutputs& _outputs, size_t _size, const std::vector<synthLib::SMidiEvent>& _midiIn, std::vector<synthLib::SMidiEvent>& _midiOut) override;
 

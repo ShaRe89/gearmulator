@@ -324,7 +324,7 @@ void Microcontroller::writeHostBitsWithWait(const uint8_t flag0, const uint8_t f
 	m_hdi08.writeHostFlags(flag0, flag1);
 }
 
-bool Microcontroller::sendPreset(const uint8_t program, const TPreset& preset, const bool isMulti)
+bool Microcontroller::sendPreset(const uint8_t program, const TPreset& preset, const bool isMulti, const uint64_t _part1ReferenceLoad)
 {
 	if(!isMulti && !isValid(preset))
 		return false;
@@ -396,7 +396,7 @@ bool Microcontroller::sendPreset(const uint8_t program, const TPreset& preset, c
 				++it;
 		}
 
-		m_pendingPresetWrites.emplace_back(SPendingPresetWrite{program, isMulti, preset});
+		m_pendingPresetWrites.emplace_back(SPendingPresetWrite{program, isMulti, preset, _part1ReferenceLoad});
 
 		return true;
 	}
@@ -426,10 +426,12 @@ bool Microcontroller::sendPreset(const uint8_t program, const TPreset& preset, c
 	LOG("Send to DSP: " << (isMulti ? "Multi" : "Single") << " to program " << static_cast<int>(program));
 
 	for (auto& parser : m_hdi08TxParsers)
-		parser.waitForPreset(isMulti ? m_rom.getMultiPresetSize() : m_rom.getSinglePresetSize());
+		parser.waitForPreset(isMulti ? m_rom.getMultiPresetSize() : m_rom.getSinglePresetSize(),
+			!isMulti && program == 0 ? _part1ReferenceLoad : 0);
 
 	m_sentPresetProgram = program;
 	m_sentPresetIsMulti = isMulti;
+	m_sentPart1ReferenceLoad = _part1ReferenceLoad;
 
 	return true;
 }
@@ -1219,6 +1221,11 @@ bool Microcontroller::requestSingle(BankNumber _bank, uint8_t _program, TPreset&
 
 bool Microcontroller::writeSingle(BankNumber _bank, uint8_t _program, const TPreset& _data)
 {
+	return writeSingle(_bank, _program, _data, 0);
+}
+
+bool Microcontroller::writeSingle(BankNumber _bank, uint8_t _program, const TPreset& _data, const uint64_t _part1ReferenceLoad)
+{
 	std::lock_guard lock(m_mutex);
 
 	if (_bank != BankNumber::EditBuffer) 
@@ -1231,6 +1238,8 @@ bool Microcontroller::writeSingle(BankNumber _bank, uint8_t _program, const TPre
 		if(_program >= m_singles[bank].size())
 			return true;	// out of range
 
+		// RAM writes, including SINGLE-STORE, do not identify their source part.
+		m_part1DirtyState.invalidate();
 		m_singles[bank][_program] = _data;
 
 		return true;
@@ -1239,10 +1248,14 @@ bool Microcontroller::writeSingle(BankNumber _bank, uint8_t _program, const TPre
 	if(_program >= m_singleEditBuffers.size() && _program != SINGLE)
 		return false;
 
+	// Unassociated single-mode loads also invalidate the Part-1 baseline.
+	if ((_program == 0 || _program == SINGLE) && !_part1ReferenceLoad)
+		m_part1DirtyState.invalidate();
+
 	LOG("Loading Single " << ROMFile::getSingleName(_data) << " to part " << static_cast<int>(_program));
 
 	// Send to DSP
-	return sendPreset(_program, _data, false);
+	return sendPreset(_program, _data, false, _part1ReferenceLoad);
 }
 
 bool Microcontroller::writeMulti(BankNumber _bank, uint8_t _program, const TPreset& _data)
@@ -1286,6 +1299,7 @@ bool Microcontroller::partBankSelect(const uint8_t _part, const uint8_t _value, 
 
 bool Microcontroller::partProgramChange(const uint8_t _part, const uint8_t _value)
 {
+	std::lock_guard lock(m_mutex);
 	TPreset single;
 
 	if(_part == SINGLE)
@@ -1303,7 +1317,9 @@ bool Microcontroller::partProgramChange(const uint8_t _part, const uint8_t _valu
 	if(getSingle(bank, _value, single))
 	{
 		m_multiEditBuffer[MD_PART_PROGRAM_NUMBER + _part] = _value;
-		return writeSingle(BankNumber::EditBuffer, _part, single);
+		const auto referenceLoad = _part == 0 && !m_loadingState && m_rom.getModel() == DeviceModel::C
+			? m_part1DirtyState.beginLoad() : 0;
+		return writeSingle(BankNumber::EditBuffer, _part, single, referenceLoad);
 	}
 
 	return true;
@@ -1364,7 +1380,7 @@ void Microcontroller::process()
 
 	LOG("Dequeuing pending preset: " << (preset.isMulti ? "Multi" : "Single") << " program " << static_cast<int>(preset.program) << " (remaining=" << m_pendingPresetWrites.size() << ")");
 
-	sendPreset(preset.program, preset.data, preset.isMulti);
+	sendPreset(preset.program, preset.data, preset.isMulti, preset.part1ReferenceLoad);
 }
 
 bool Microcontroller::getState(std::vector<unsigned char>& _state, const StateType _type)
@@ -1429,6 +1445,7 @@ bool Microcontroller::setState(const std::vector<synthLib::SMidiEvent>& _events)
 	std::lock_guard lock(m_mutex);
 
 	// delay all preset loads until everything is loaded
+	m_part1DirtyState.invalidate();
 	m_loadingState = true;
 
 	std::vector<SMidiEvent> unusedResponses;
@@ -1802,10 +1819,16 @@ void Microcontroller::receiveUpgradedPreset()
 		return;
 
 	std::vector<uint8_t> upgradedPreset;
+	const auto noUpgradeLoad = m_hdi08TxParsers.front().takeNoUpgradeLoad();
 	m_hdi08TxParsers.front().getPresetData(upgradedPreset);
 
 	if(upgradedPreset.empty())
+	{
+		if (noUpgradeLoad && noUpgradeLoad == m_sentPart1ReferenceLoad
+			&& !m_sentPresetIsMulti && m_sentPresetProgram == 0 && m_rom.getModel() == DeviceModel::C)
+			m_part1DirtyState.completeLoad(noUpgradeLoad, m_singleEditBuffers[0].data(), Part1DirtyState::PayloadSize);
 		return;
+	}
 
 	if (m_sentPresetProgram == 0xff)
 	{
@@ -1839,7 +1862,18 @@ void Microcontroller::receiveUpgradedPreset()
 			if(m_rom.isTIFamily())
 				single[128 + g_arpModeParamTI] = arpMode;
 		}
+		if (m_sentPresetProgram == 0 && m_rom.getModel() == DeviceModel::C)
+			m_part1DirtyState.completeLoad(m_sentPart1ReferenceLoad, single.data(), upgradedPreset.size());
 	}
+}
+
+Microcontroller::Part1DirtyStatus Microcontroller::getPart1DirtyStatus() const
+{
+	std::lock_guard lock(m_mutex);
+	if (m_rom.getModel() != DeviceModel::C)
+		return Part1DirtyStatus::Unknown;
+	return m_part1DirtyState.status(m_singleEditBuffers[0].data(), Part1DirtyState::PayloadSize,
+		m_loadingState || presetWriteInProgress() || !m_pendingInput.empty());
 }
 
 bool Microcontroller::isValid(const TPreset& _preset)
