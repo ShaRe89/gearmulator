@@ -867,13 +867,14 @@ namespace mcpServer
 		{
 			ToolDef tool;
 			tool.name = "get_device_info";
-			tool.description = "Get device information: model, sample rate, channel count, DSP clock, validity";
+			tool.description = "Get device information: model, sample rate, channel count, DSP clock, validity, Part-1 dirty status (Unknown/Clean/Dirty)";
 			tool.handler = [this](const JsonValue&) -> JsonValue
 			{
 				auto& plugin = m_processor.getPlugin();
 
 				auto result = JsonValue::object();
 				result.set("valid", JsonValue::fromBool(plugin.isValid()));
+				result.set("part1DirtyStatus", JsonValue::fromString(m_processor.getPart1DirtyStatus()));
 				result.set("hostSamplerate", JsonValue::fromDouble(static_cast<double>(plugin.getHostSamplerate())));
 				result.set("dspClockPercent", JsonValue::fromInt(static_cast<int>(m_processor.getDspClockPercent())));
 				result.set("dspClockHz", JsonValue::fromInt64(static_cast<int64_t>(m_processor.getDspClockHz())));
