@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <cstring>
 
 #include "dspMemoryPatches.h"
@@ -37,6 +38,9 @@ namespace virusLib
 			m_auditionOutcome = std::make_shared<std::atomic<uint64_t>>(0);
 			auto config = m_dsp->getJIT().getConfig();
 			config.virusCAuditionOutcome = m_auditionOutcome;
+			const auto* trace = std::getenv("OSIRUS_VIRUS_C_INDIRECT_CALL_TRACE");
+			if(trace && std::strcmp(trace, "1") == 0)
+				config.virusCIndirectCallTrace = std::make_shared<dsp56k::VirusCIndirectCallTrace>();
 			m_dsp->getJIT().setConfig(config);
 		}
 
@@ -718,6 +722,11 @@ namespace virusLib
 		}
 
 		m_dsp->processAudio(inputs, outputs, _samples, getExtraLatencySamples());
+	}
+
+	std::shared_ptr<const dsp56k::VirusCIndirectCallTrace> Device::getIndirectCallTrace() const
+	{
+		return m_dsp->getJIT().getConfig().virusCIndirectCallTrace;
 	}
 
 	void Device::onAudioWritten()

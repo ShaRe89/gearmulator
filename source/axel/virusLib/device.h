@@ -17,6 +17,11 @@ namespace synthLib
 	struct DspMemoryPatches;
 }
 
+namespace dsp56k
+{
+	class VirusCIndirectCallTrace;
+}
+
 namespace virusLib
 {
 	class Device final : public synthLib::DspClockDevice<dsp56k::EsxiClock>
@@ -35,6 +40,7 @@ namespace virusLib
 		void setBpmLedDiagnosticsEnabled(bool _enabled) { m_mc->setBpmLedDiagnosticsEnabled(_enabled); }
 		bool readBpmLedDiagnostics(BpmLedDiagnostics& _out) const { return m_mc->readBpmLedDiagnostics(_out); }
 		const auto& getAuditionOutcome() const { return m_auditionOutcome; }
+		std::shared_ptr<const dsp56k::VirusCIndirectCallTrace> getIndirectCallTrace() const;
 		Microcontroller::Part1DirtyStatus getPart1DirtyStatus() const
 		{
 			return m_mc ? m_mc->getPart1DirtyStatus() : Microcontroller::Part1DirtyStatus::Unknown;

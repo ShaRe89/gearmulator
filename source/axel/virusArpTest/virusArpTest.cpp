@@ -8,12 +8,16 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
 #include <limits>
 #include <memory>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "virusLib/device.h"
@@ -21,11 +25,13 @@
 #include "virusLib/romloader.h"
 
 #include "baseLib/os.h"
+#include "dsp56kEmu/jitconfig.h"
 
 namespace
 {
 	using namespace virusLib;
 	using namespace synthLib;
+	using IndirectCallTrace = dsp56k::VirusCIndirectCallTrace;
 
 	float g_samplerate = 44100.0f;	// the device's, once it runs
 	bool g_ti = true;				// a TI firmware, else an A, B or C
@@ -167,6 +173,18 @@ namespace
 
 		const virusLib::Arpeggiator& getArpeggiator() const { return m_device->getArpeggiator(); }
 		const ROMFile& getRom() const { return m_rom; }
+
+		void stopAndCollectTrace(std::vector<IndirectCallTrace::Event>& _events)
+		{
+			const auto trace = m_device->getIndirectCallTrace();
+			m_device.reset();
+			if (!trace)
+				return;
+
+			std::array<IndirectCallTrace::Event, IndirectCallTrace::capacity> events;
+			const auto count = trace->snapshot(events);
+			_events.insert(_events.end(), events.begin(), events.begin() + count);
+		}
 
 		// Sends _events, at their sample from now, and returns what the device sends back
 		std::vector<SMidiEvent> send(const std::vector<std::pair<uint64_t, SMidiEvent>>& _events, const uint64_t _samples)
@@ -1050,6 +1068,42 @@ namespace
 		std::ifstream f(_path, std::ios::binary);
 		return {std::istreambuf_iterator<char>(f), {}};
 	}
+
+	bool writeIndirectCallTrace(const std::filesystem::path& _path,
+		const std::vector<IndirectCallTrace::Event>& _events)
+	{
+		std::error_code ec;
+		const auto status = std::filesystem::symlink_status(_path, ec);
+		if (status.type() != std::filesystem::file_type::not_found)
+		{
+			std::fputs("Trace destination already exists or cannot be checked. Use a new file path.\n", stderr);
+			return false;
+		}
+
+		std::ofstream out(_path);
+		if (!out)
+		{
+			std::fputs("Could not open the trace CSV.\n", stderr);
+			return false;
+		}
+
+		out << "PC,Zieladresse,R2,M2\n" << std::hex << std::uppercase << std::setfill('0');
+		for (const auto& event : _events)
+		{
+			out << "0x" << std::setw(6) << event.pc
+				<< ",0x" << std::setw(6) << event.target
+				<< ",0x" << std::setw(6) << event.r2
+				<< ",0x" << std::setw(6) << event.m2 << '\n';
+		}
+		out.close();
+		if (!out)
+		{
+			std::fputs("Could not finish writing the trace CSV. It may be incomplete.\n", stderr);
+			return false;
+		}
+		std::printf("Trace CSV: %zu events\n", _events.size());
+		return true;
+	}
 }
 
 int main(const int _argc, char* _argv[])
@@ -1064,6 +1118,18 @@ int main(const int _argc, char* _argv[])
 
 	const std::string romName = _argv[1];
 	const std::string filter = _argc > 2 ? _argv[2] : "";
+	std::filesystem::path tracePath;
+	const auto* traceEnabled = std::getenv("OSIRUS_VIRUS_C_INDIRECT_CALL_TRACE");
+	const auto* traceOutput = std::getenv("OSIRUS_VIRUS_C_INDIRECT_CALL_TRACE_OUT");
+	if (traceEnabled && std::string_view(traceEnabled) == "1" && traceOutput && *traceOutput)
+	{
+		tracePath = traceOutput;
+		if (!tracePath.is_absolute())
+		{
+			std::fputs("OSIRUS_VIRUS_C_INDIRECT_CALL_TRACE_OUT must be an absolute path.\n", stderr);
+			return 2;
+		}
+	}
 
 	const auto romData = readFile(romName);
 
@@ -1097,6 +1163,8 @@ int main(const int _argc, char* _argv[])
 	createCases(cases, static_cast<int>(firmware.getArpeggiator().getPatternCount()));
 
 	size_t failed = 0, run = 0;
+	std::vector<IndirectCallTrace::Event> traceEvents;
+	bool usedSharedFirmware = false;
 
 	for (const auto& c : cases.get())
 	{
@@ -1152,11 +1220,23 @@ int main(const int _argc, char* _argv[])
 		std::fflush(stdout);
 
 		failed += result.ok ? 0 : 1;
+		if (!tracePath.empty())
+		{
+			if (fresh)
+				fresh->stopAndCollectTrace(traceEvents);
+			else
+				usedSharedFirmware = true;
+		}
 	}
+
+	if (usedSharedFirmware)
+		firmware.stopAndCollectTrace(traceEvents);
 
 	if (filter.empty() || filter == "transparency")
 		failed += checkTransparency(romData, romName, cases.base());
 
 	std::printf("%zu of %zu cases differ\n", failed, run);
+	if (!tracePath.empty() && !writeIndirectCallTrace(tracePath, traceEvents))
+		return 2;
 	return failed ? 1 : 0;
 }
