@@ -967,6 +967,11 @@ namespace virus
         return dst;
     }
 
+    static bool storeAllowedByMemoryProtect(const int value)
+    {
+        return value == 0 || value == 1; // Off and Warn allow STORE.
+    }
+
     bool Controller::singleStoreContextValid(const int _expectedMode, const int _sourcePart) const
     {
         const auto* mode = getParameter(g_paramPlayMode, 0);
@@ -975,7 +980,7 @@ namespace virus
             && ((_expectedMode == 0 && _sourcePart == 0) || (_expectedMode == 1 && _sourcePart >= 0 && _sourcePart <= 15))
             && getCurrentPart() == _sourcePart
             && mode && mode->getUnnormalizedValue() == _expectedMode
-            && protect && protect->getUnnormalizedValue() == 0;
+            && protect && storeAllowedByMemoryProtect(protect->getUnnormalizedValue());
     }
 
     uint32_t Controller::storeSingle(const int _bank, const int _program, const std::string& _name, const std::optional<int> _sourcePart)
@@ -1075,7 +1080,7 @@ namespace virus
             return;
 
         const bool protectReply = _msg.size() == 11 && _msg[6] == virusLib::PAGE_C && _msg[7] == 0 && _msg[8] == 118;
-        if(protectReply && _msg[9] != 0)
+        if(protectReply && !storeAllowedByMemoryProtect(_msg[9]))
         {
             m_singleStoreError = "PROTECT CHANGED";
             // A later protect change cannot undo an already submitted RAM write.
@@ -1088,7 +1093,7 @@ namespace virus
 
         if(protectReply)
         {
-            // ROM blocks 2, JSON represents only 0/1. Never infer 1 -> 2 or accept a clamped GUI value.
+            // Only the validated raw reply can authorize the write.
             if(m_singleStorePhase != SingleStorePhase::Protect)
                 return;
             m_singleStorePhase = SingleStorePhase::Readback;
@@ -1142,7 +1147,7 @@ namespace virus
         return m_processor.getModel() == virusLib::DeviceModel::C
             && mode && mode->getUnnormalizedValue() == 2
             && getCurrentPart() == m_multiStorePart
-            && protect && protect->getUnnormalizedValue() == 0;
+            && protect && storeAllowedByMemoryProtect(protect->getUnnormalizedValue());
     }
 
     uint32_t Controller::storeMulti(const int _program, const std::string& _name)
@@ -1226,7 +1231,7 @@ namespace virus
 
         const bool protectReply = _msg.size() == 11 && _msg[6] == virusLib::PAGE_C
             && _msg[7] == 0 && _msg[8] == 118;
-        if(protectReply && _msg[9] != 0)
+        if(protectReply && !storeAllowedByMemoryProtect(_msg[9]))
         {
             m_multiStoreError = "PROTECT CHANGED";
             m_multiStorePhase = m_multiStorePhase == MultiStorePhase::Protect
