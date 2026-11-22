@@ -1095,6 +1095,12 @@ bool Microcontroller::sendSysex(const synthLib::SysexBuffer& _data, std::vector<
 				if(page == PAGE_C || (page == PAGE_B && param == CLOCK_TEMPO))
 				{
 					applyToMultiEditBuffer(page, part, param, value);
+					if(page == PAGE_B && m_rom.getModel() == DeviceModel::C
+						&& m_globalSettings[PLAY_MODE] == PlayModeSingle && (part == SINGLE || part == 0))
+					{
+						// The C++ arpeggiator reads the tempo from the active SINGLE edit buffer.
+						applyToSingleEditBuffer(page, SINGLE, param, value);
+					}
 
 					const auto command = static_cast<ControlCommand>(param);
 
